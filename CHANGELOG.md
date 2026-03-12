@@ -5,6 +5,44 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.0] - 2026-03-12
+
+### Added
+
+- **Renovated `MLP` in `components/encoders.py`** with a richer, research-oriented API:
+  - Separate `norm` / `final_norm` specs for hidden vs. output normalization
+  - Separate `activation` / `final_activation` and `dropout` / `final_dropout` for independent per-phase control
+  - New `linear_factory` parameter: pass a callable `(in_dim, out_dim) -> nn.Module` to build pointwise-conv stacks (e.g. `nn.Conv2d(..., kernel_size=1)`) instead of dense `nn.Linear`
+  - New activations: `sigmoid` (`nn.Sigmoid`) and `sin` (new `SinActivation` module)
+  - Backward-compatible: `use_layer_norm=True` maps to `norm='layer'` for existing call-sites
+- **`SinActivation` module** (`components/encoders.py`) — trivial `nn.Module` wrapping `torch.sin`
+- **Architecture-faithful example rewrites** for all seven supported papers:
+  - `example_meshgraphnets.py`: local 4-linear MLP blocks with terminal `LayerNorm`, explicit GraphNet encoder/processor/decoder structure
+  - `example_windfarm_gno.py`: output-only `LayerNorm` MLP matching original GNO design
+  - `example_graph_pde_gno.py`: `NNConv`-style edge-conditioned convolution with full kernel matrices; removed incorrect scalar gating
+  - `example_transolver.py`: locked FFN parity to original, fixed device placement
+  - `example_deepxde.py`: new `DeepXDEFNN` with `sin`/`sigmoid` support, per-layer dropout, faithful residual connections, and proper Glorot/He initializers; no spurious `LayerNorm`
+  - `example_neuraloperator_fno.py`: added `linear_skip` (1×1 conv) branch inside `FNOBlockFramework`; residual now applied internally per original; lifting/projection use `MLP` with `linear_factory`
+  - `example_unisolver.py`: `FeedForward` uses framework `MLP`; removed unused import
+- **Backward-compatible model aliases** added to example modules:
+  - `PINNModel = DeepXDEModel`
+  - `FNO = NeuralOperatorFNO`
+  - `UniSolver = Unisolver`
+  - `GraphPDEGNO = GraphPDE_GNO`
+- `examples/core/__init__.py` added so `core.meshgraphnets_core` is importable in tests
+- Expanded `tests/test_components.py` to cover new `MLP` API: hidden-only norm, final-only norm, `sigmoid`/`sin` activations, `linear_factory` with 1×1 convolutions, and legacy `use_layer_norm` compatibility
+
+### Fixed
+
+- **`ProbeDecoder` indexing bug**: receiver indices for aggregation were not offset by source node count; aggregation now uses correct local indices before offsetting
+- `example_deepxde.py`: `sin` and `sigmoid` activations were silently remapped to `tanh`; now supported natively
+- `example_neuraloperator_fno.py`: external `x = x + block(x)` residual was incorrect; residual is now internal to each block
+
+### Changed
+
+- `MLP` constructor extended with `norm`, `final_norm`, `final_activation`, `final_dropout`, `linear_factory` keyword arguments (fully additive; no existing positional arguments changed)
+- README updated to document the renovated `MLP` API and new activation/norm options
+
 ## [2.2.0] - 2026-03-12
 
 ### Removed
@@ -148,12 +186,6 @@ See [MIGRATION.md](MIGRATION.md) for complete guide.
 
 ## Future Versions
 
-### [2.3.0] (Planned)
-
-- Add position encoding module
-- Add physics-informed loss components
-- Add conditioning layers (AdaLN, FiLM)
-
 ### [3.0.0] (Future)
 
 - Potential breaking changes based on v2.x feedback
@@ -167,7 +199,8 @@ See [MIGRATION.md](MIGRATION.md) for complete guide.
 
 | Version | Python | PyTorch | Status |
 |---------|--------|---------|--------|
-| 2.2.x | 3.9+ | 2.0+ | Current |
+| 2.3.x | 3.9+ | 2.0+ | Current |
+| 2.2.x | 3.9+ | 2.0+ | Deprecated |
 | 2.1.x | 3.9+ | 2.0+ | Deprecated |
 | 2.0.x | 3.9+ | 2.0+ | Deprecated |
 

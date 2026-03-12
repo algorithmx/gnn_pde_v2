@@ -297,10 +297,13 @@ class PhysicsAttentionIrregularMesh(nn.Module):
 
 
 class TransolverBlock(nn.Module):
-    """
-    Transolver transformer block with Physics-Attention.
-    
-    Uses framework's MLP for the feed-forward network.
+    """Transolver transformer block with Physics-Attention.
+
+    Parity notes vs upstream `external_research/Transolver/.../models/Transolver.py`:
+    - Upstream defines both `mlp` and `mlp_new`, but only `mlp` is used in the forward pass.
+      We intentionally implement just the used path.
+    - Feed-forward is a 2-linear mapping with an activation in between; we keep `use_layer_norm=False`
+      to avoid introducing extra normalization.
     """
     
     def __init__(

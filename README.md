@@ -68,6 +68,11 @@ gnn_pde_v2/
     └── test_examples.py    # Example reproduction tests
 ```
 
+`MLP` supports:
+- arbitrary depth via `hidden_dims`
+- hidden vs final normalization separately (`norm=` vs `final_norm=`)
+- dense or pointwise-conv stacks via `linear_factory`
+
 ## Quick Start
 
 ### Lean Core API (Recommended)
@@ -81,8 +86,8 @@ import torch
 class MyModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.node_encoder = MLP(in_dim=5, out_dim=128, hidden_dims=[128])
-        self.edge_encoder = MLP(in_dim=3, out_dim=128, hidden_dims=[128])
+        self.node_encoder = MLP(in_dim=5, out_dim=128, hidden_dims=[128], use_layer_norm=False)
+        self.edge_encoder = MLP(in_dim=3, out_dim=128, hidden_dims=[128], use_layer_norm=False)
         self.processor = GraphNetProcessor(
             node_dim=128,
             edge_dim=128,
@@ -142,7 +147,7 @@ metrics = model.train_step((graph, target))
 
 | Component | Description | Usage |
 |-----------|-------------|-------|
-| `MLP` | Standard multi-layer perceptron | Encoder/Decoder |
+| `MLP` | Flexible dense or pointwise-conv feedforward stack | Encoder/Decoder |
 | `FourierFeatureEncoder` | Random Fourier feature lifting | Encoder |
 | `GraphNetBlock` | Graph message passing block | Processor |
 | `TransformerBlock` | Multi-head attention block | Processor |
@@ -239,9 +244,9 @@ from gnn_pde_v2 import GraphsTuple
 from gnn_pde_v2.components import MLP, GraphNetBlock, Residual
 
 # Direct component composition for maximum flexibility
-encoder = MLP(in_dim=5, out_dim=128, hidden_dims=[128])
+encoder = MLP(in_dim=5, out_dim=128, hidden_dims=[128], use_layer_norm=False)
 processor = Residual(GraphNetBlock(128, 128))
-decoder = MLP(in_dim=128, out_dim=2, hidden_dims=[64])
+decoder = MLP(in_dim=128, out_dim=2, hidden_dims=[64], use_layer_norm=False)
 ```
 
 ### Rapid Experimentation (Convenient API)

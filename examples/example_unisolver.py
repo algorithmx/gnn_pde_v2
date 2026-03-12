@@ -219,6 +219,10 @@ class Unisolver(AutoRegisterModel, name='unisolver'):
         }
 
 
+# Backward-compatible alias expected by tests/examples.
+UniSolver = Unisolver
+
+
 class Rearrange(nn.Module):
     """Rearrange tensor dimensions (einops-style)."""
     
@@ -270,12 +274,17 @@ class FeedForward(nn.Module):
     
     def __init__(self, dim, hidden_dim, dropout=0.0):
         super().__init__()
-        # Could use framework's MLP here, but keeping exact original structure
+        # Original structure: Linear -> GELU -> Dropout -> Linear -> Dropout.
+        # The framework MLP matches this when use_layer_norm=False and hidden_dims=[hidden_dim].
         self.net = nn.Sequential(
-            nn.Linear(dim, hidden_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(hidden_dim, dim),
+            MLP(
+                in_dim=dim,
+                out_dim=dim,
+                hidden_dims=[hidden_dim],
+                activation='gelu',
+                dropout=dropout,
+                use_layer_norm=False,
+            ),
             nn.Dropout(dropout),
         )
     

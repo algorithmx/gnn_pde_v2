@@ -101,8 +101,9 @@ class ProbeDecoder(nn.Module):
         for layer in self.probe_layers:
             probe_graph = layer(probe_graph)
         
-        # Decode at probe nodes (query points)
-        return self.output_mlp(probe_graph.nodes)
+        # Decode only at probe nodes (query points), which are appended after source nodes
+        n_queries = query_positions.shape[0]
+        return self.output_mlp(probe_graph.nodes[-n_queries:])
     
     def _construct_probe_graph(
         self,
@@ -122,6 +123,7 @@ class ProbeDecoder(nn.Module):
             GraphsTuple with probe nodes and edges
         """
         n_queries = query_positions.shape[0]
+        n_source = source_positions.shape[0]
         
         # Find k nearest source nodes for each query point
         distances = torch.cdist(query_positions, source_positions)  # [N_queries, N_source]
@@ -129,9 +131,10 @@ class ProbeDecoder(nn.Module):
         # nearest_indices: [N_queries, k_nearest]
         
         # Create edges: source nodes -> probe nodes
-        # Receivers: probe nodes (0 to n_queries-1)
+        # Receivers: probe nodes appended after source nodes
         # Senders: source nodes (nearest_indices flattened)
-        receivers = torch.arange(n_queries, device=query_positions.device).repeat_interleave(self.k_nearest)
+        local_receivers = torch.arange(n_queries, device=query_positions.device).repeat_interleave(self.k_nearest)
+        receivers = local_receivers + n_source
         senders = nearest_indices.reshape(-1)
         
         # Edge features: distances
@@ -155,22 +158,25 @@ class ProbeDecoder(nn.Module):
         # Create probe graph
         # Nodes: initialized from aggregated source features
         probe_nodes = torch.zeros(n_queries, source_features.shape[1], device=query_positions.device)
-        probe_nodes.index_add_(0, receivers, source_features[senders])
+        probe_nodes.index_add_(0, local_receivers, source_features[senders])
         
         # Normalize by number of incoming edges
         counts = torch.zeros(n_queries, device=query_positions.device)
-        counts.index_add_(0, receivers, torch.ones_like(receivers, dtype=torch.float))
+        counts.index_add_(0, local_receivers, torch.ones_like(local_receivers, dtype=torch.float))
         probe_nodes = probe_nodes / (counts.unsqueeze(1) + 1e-8)
         
+        all_nodes = torch.cat([source_features, probe_nodes], dim=0)
+        all_positions = torch.cat([source_positions, query_positions], dim=0)
+
         return GraphsTuple(
-            nodes=probe_nodes,
+            nodes=all_nodes,
             edges=edge_features,
             receivers=receivers,
             senders=senders,
             globals=None,
-            n_node=torch.tensor([n_queries], device=query_positions.device),
+            n_node=torch.tensor([n_source + n_queries], device=query_positions.device),
             n_edge=torch.tensor([len(receivers)], device=query_positions.device),
-            positions=query_positions,
+            positions=all_positions,
         )
 
 

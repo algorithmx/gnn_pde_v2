@@ -29,37 +29,91 @@ from typing import Optional
 from dataclasses import replace
 from gnn_pde_v2.core.graph import GraphsTuple
 from gnn_pde_v2.convenient import AutoRegisterModel
-from gnn_pde_v2.components import GraphNetBlock, MLP, MLPDecoder
+from gnn_pde_v2.core.functional import scatter_sum
+
+
+class MeshGraphNetsMLP(nn.Module):
+    """MeshGraphNets-faithful MLP.
+
+    Original `build_mlp` (meshgraphnets_pytorch/model/model.py):
+    - 4 Linear layers
+    - ReLU after first 3
+    - optional terminal LayerNorm
+    """
+
+    def __init__(
+        self,
+        in_dim: int,
+        hidden_dim: int,
+        out_dim: int,
+        layer_norm_out: bool = True,
+    ):
+        super().__init__()
+
+        layers: list[nn.Module] = [
+            nn.Linear(in_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, out_dim),
+        ]
+        if layer_norm_out:
+            layers.append(nn.LayerNorm(out_dim))
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+
+
+class MeshGraphNetsGNBlock(nn.Module):
+    """MeshGraphNets-faithful processor block.
+
+    Edge update:
+      e' = MLP_e([v_s, v_r, e])
+    Node update:
+      v' = MLP_v([v, sum_{in edges} e'])
+    Residual update is applied outside this block for both nodes and edges.
+    """
+
+    def __init__(self, hidden_size: int):
+        super().__init__()
+        self.edge_mlp = MeshGraphNetsMLP(
+            in_dim=3 * hidden_size,
+            hidden_dim=hidden_size,
+            out_dim=hidden_size,
+            layer_norm_out=True,
+        )
+        self.node_mlp = MeshGraphNetsMLP(
+            in_dim=2 * hidden_size,
+            hidden_dim=hidden_size,
+            out_dim=hidden_size,
+            layer_norm_out=True,
+        )
+
+    def forward(self, graph: GraphsTuple) -> GraphsTuple:
+        if graph.nodes is None or graph.edges is None:
+            raise ValueError("MeshGraphNetsGNBlock requires both nodes and edges")
+
+        senders = graph.senders
+        receivers = graph.receivers
+
+        v_s = graph.nodes[senders]
+        v_r = graph.nodes[receivers]
+
+        edge_in = torch.cat([v_s, v_r, graph.edges], dim=-1)
+        new_edges = self.edge_mlp(edge_in)
+
+        agg_in = scatter_sum(new_edges, receivers, dim=0, dim_size=graph.nodes.shape[0])
+        node_in = torch.cat([graph.nodes, agg_in], dim=-1)
+        new_nodes = self.node_mlp(node_in)
+
+        return graph.replace(nodes=new_nodes, edges=new_edges)
 
 
 class MeshGraphNets(AutoRegisterModel, name='meshgraphnets'):
-    """
-    MeshGraphNets implementation using gnn_pde_v2 framework components.
-    
-    Precise equivalent of MeshGraphNets from deepmind/meshgraphnets_pytorch.
-    
-    Default hyperparameters from the paper:
-    - hidden_size: 128
-    - message_passing_steps: 15
-    - Encoder: 2-layer MLPs for nodes and edges
-    - Processor: 15 GraphNetBlocks with residual connections
-    - Decoder: 2-layer MLP
-    - Activation: SiLU (Swish)
-    
-    Architecture:
-        Graph(x, edge_attr, edge_index)
-            ↓
-        Encoder: MLP_v(x), MLP_e(edge_attr)
-            ↓
-        Processor × 15:
-            For each step:
-                e_ij = MLP_edge([v_i, v_j, e_ij])
-                v_i = v_i + MLP_node([v_i, Σ_j e_ji])
-            ↓
-        Decoder: MLP_decode(v)
-            ↓
-        Output: acceleration [N, output_size]
-    """
+    """MeshGraphNets implementation aligned to `meshgraphnets_pytorch`."""
     
     def __init__(
         self,
@@ -86,38 +140,32 @@ class MeshGraphNets(AutoRegisterModel, name='meshgraphnets'):
         self.hidden_size = hidden_size
         self.message_passing_steps = message_passing_steps
         
-        # Encoder: Separate node and edge MLPs using canonical components
-        self.node_encoder = MLP(
+        # Encoder: faithful 4-linear MLP with terminal LayerNorm
+        self.node_encoder = MeshGraphNetsMLP(
             in_dim=node_input_size,
+            hidden_dim=hidden_size,
             out_dim=hidden_size,
-            hidden_dims=[hidden_size],  # 2-layer MLP: in->hidden->out
-            activation=activation,
+            layer_norm_out=True,
         )
-        self.edge_encoder = MLP(
+        self.edge_encoder = MeshGraphNetsMLP(
             in_dim=edge_input_size,
+            hidden_dim=hidden_size,
             out_dim=hidden_size,
-            hidden_dims=[hidden_size],  # 2-layer MLP: in->hidden->out
-            activation=activation,
+            layer_norm_out=True,
         )
-        
-        # Processor: Multiple message passing steps using framework GraphNetBlocks
+
+        # Processor: faithful GN blocks
         self.processor_blocks = nn.ModuleList([
-            GraphNetBlock(
-                node_dim=hidden_size,
-                edge_dim=hidden_size,
-                global_dim=None,
-                hidden_dim=hidden_size,
-                activation=activation,
-            )
+            MeshGraphNetsGNBlock(hidden_size=hidden_size)
             for _ in range(message_passing_steps)
         ])
-        
-        # Decoder: MLP on node features using framework component
-        self.decoder = MLPDecoder(
-            node_dim=hidden_size,
+
+        # Decoder: faithful 4-linear MLP WITHOUT terminal LayerNorm
+        self.decoder = MeshGraphNetsMLP(
+            in_dim=hidden_size,
+            hidden_dim=hidden_size,
             out_dim=output_size,
-            hidden_dims=[hidden_size],  # 2-layer MLP
-            activation=activation,
+            layer_norm_out=False,
         )
     
     def forward(self, graph: GraphsTuple) -> torch.Tensor:
@@ -153,8 +201,8 @@ class MeshGraphNets(AutoRegisterModel, name='meshgraphnets'):
             )
         
         # Decode: Project to output dimension
-        output = self.decoder(latent)
-        
+        output = self.decoder(latent.nodes)
+
         return output
     
     def save_config(self):
@@ -163,7 +211,7 @@ class MeshGraphNets(AutoRegisterModel, name='meshgraphnets'):
             'model_type': 'meshgraphnets',
             'node_input_size': self.node_encoder.net[0].in_features,
             'edge_input_size': self.edge_encoder.net[0].in_features,
-            'output_size': self.decoder.mlp.net[-1].out_features,
+            'output_size': self.decoder.net[-1].out_features if isinstance(self.decoder.net[-1], nn.Linear) else self.decoder.net[-2].out_features,
             'hidden_size': self.hidden_size,
             'message_passing_steps': self.message_passing_steps,
         }

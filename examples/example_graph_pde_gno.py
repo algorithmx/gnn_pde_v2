@@ -98,12 +98,17 @@ class GraphPDE_GNO(AutoRegisterModel, name='graph_pde_gno'):
         
         # ==================== Processor ====================
         
-        # Stack of graph convolution blocks
+        # Stack of edge-conditioned convolution blocks (NNConv-style)
         self.processor = nn.ModuleList([
             GraphConvBlock(
                 hidden_size=hidden_size,
                 edge_hidden_size=hidden_size,
                 edge_weight_type=edge_weight_type,
+                aggr='mean',
+                root_weight=True,
+                bias=True,
+                residual=False,
+                use_layer_norm=False,
             )
             for _ in range(num_layers)
         ])
@@ -184,104 +189,130 @@ class GraphPDE_GNO(AutoRegisterModel, name='graph_pde_gno'):
         }
 
 
+# Backward-compatible alias expected by tests/examples.
+GraphPDEGNO = GraphPDE_GNO
+
+
 class GraphConvBlock(nn.Module):
+    """Edge-conditioned convolution block (NNConv-style).
+
+    Supports kernel generation modes:
+    - 'full': generate a full [hidden, hidden] weight matrix per edge
+    - 'vector': generate a diagonal vector per edge (per-channel gating)
+    - 'scalar': generate a scalar per edge (uniform gating)
+
+    This is intended to match the key behavior in graph-pde's NNConv:
+    message = x_src @ W(edge_attr), with optional root transform and bias.
     """
-    Graph Convolution Block with edge-conditioned weights.
-    
-    Implements edge-conditioned message passing:
-    1. Generate edge weights from edge embeddings
-    2. Aggregate weighted messages from neighbors
-    3. Update node features with MLP + residual
-    
-    The key innovation is learning edge weights from edge attributes,
-    allowing heterogeneous message passing.
-    """
-    
+
     def __init__(
         self,
         hidden_size: int,
         edge_hidden_size: int,
-        edge_weight_type: str = 'scalar',
+        edge_weight_type: str = 'full',
+        aggr: str = 'mean',
+        root_weight: bool = True,
+        bias: bool = True,
+        residual: bool = False,
+        use_layer_norm: bool = False,
     ):
         super().__init__()
-        
+
+        if aggr not in {'add', 'mean'}:
+            raise ValueError(f"Unknown aggr: {aggr}")
+
         self.hidden_size = hidden_size
         self.edge_weight_type = edge_weight_type
-        
-        # Edge weight generation network
-        if edge_weight_type == 'scalar':
-            self.edge_weight_net = nn.Sequential(
-                nn.Linear(edge_hidden_size, hidden_size),
-                nn.ReLU(),
-                nn.Linear(hidden_size, 1),
-            )
+        self.aggr = aggr
+        self.residual = residual
+        self.use_layer_norm = use_layer_norm
+
+        # Edge kernel generation network.
+        # Shape contract:
+        # - full   -> [E, H*H]
+        # - vector -> [E, H]
+        # - scalar -> [E, 1]
+        if edge_weight_type == 'full':
+            out_dim = hidden_size * hidden_size
         elif edge_weight_type == 'vector':
-            self.edge_weight_net = nn.Sequential(
-                nn.Linear(edge_hidden_size, hidden_size),
-                nn.ReLU(),
-                nn.Linear(hidden_size, hidden_size),
-            )
+            out_dim = hidden_size
+        elif edge_weight_type == 'scalar':
+            out_dim = 1
         else:
             raise ValueError(f"Unknown edge_weight_type: {edge_weight_type}")
-        
-        # Node update network
-        self.node_update = nn.Sequential(
-            nn.Linear(hidden_size * 2, hidden_size),
+
+        self.edge_weight_net = nn.Sequential(
+            nn.Linear(edge_hidden_size, hidden_size),
             nn.ReLU(),
-            nn.Linear(hidden_size, hidden_size),
+            nn.Linear(hidden_size, out_dim),
         )
-        
-        # Layer normalization for stability
-        self.norm = nn.LayerNorm(hidden_size)
-    
+
+        # Optional root transform and bias (as in NNConv)
+        if root_weight:
+            self.root = nn.Parameter(torch.empty(hidden_size, hidden_size))
+        else:
+            self.register_parameter('root', None)
+
+        if bias:
+            self.bias = nn.Parameter(torch.empty(hidden_size))
+        else:
+            self.register_parameter('bias', None)
+
+        self.norm = nn.LayerNorm(hidden_size) if use_layer_norm else None
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+        if self.root is not None:
+            nn.init.xavier_uniform_(self.root)
+        if self.bias is not None:
+            nn.init.zeros_(self.bias)
+
     def forward(
         self,
         node_emb: torch.Tensor,
         edge_index: torch.Tensor,
         edge_emb: torch.Tensor,
     ) -> torch.Tensor:
-        """
-        Graph convolution step.
-        
-        Args:
-            node_emb: [N, hidden_size] - Current node embeddings
-            edge_index: [2, E] - Edge connectivity
-            edge_emb: [E, edge_hidden_size] - Edge embeddings
-            
-        Returns:
-            [N, hidden_size] - Updated node embeddings
-        """
         src, dst = edge_index
-        
-        # Generate edge weights from edge embeddings
-        edge_weights = self.edge_weight_net(edge_emb)
-        
-        # Get source node features
-        src_features = node_emb[src]
-        
-        # Apply edge weights to messages
-        messages = edge_weights * src_features
-        
-        # Aggregate messages at destination nodes
+        H = self.hidden_size
+
+        src_x = node_emb[src]  # [E, H]
+
+        w = self.edge_weight_net(edge_emb)
+        if self.edge_weight_type == 'full':
+            W = w.view(-1, H, H)
+            msg = torch.bmm(src_x.unsqueeze(1), W).squeeze(1)  # [E, H]
+        elif self.edge_weight_type == 'vector':
+            msg = src_x * w  # [E, H]
+        else:  # scalar
+            msg = src_x * w  # [E, H]
+
         num_nodes = node_emb.shape[0]
-        aggregated = torch.zeros(num_nodes, self.hidden_size, device=node_emb.device)
-        aggregated.scatter_add_(0, dst.unsqueeze(-1).expand(-1, self.hidden_size), messages)
-        
-        # Normalize by degree (mean pooling instead of sum)
-        degree = torch.zeros(num_nodes, device=node_emb.device)
-        degree.scatter_add_(0, dst, torch.ones(len(dst), device=node_emb.device))
-        degree = degree.clamp(min=1).unsqueeze(-1)
-        
-        aggregated = aggregated / degree
-        
-        # Update node features
-        update_input = torch.cat([node_emb, aggregated], dim=-1)
-        node_update = self.node_update(update_input)
-        
-        # Residual connection and normalization
-        node_emb = self.norm(node_emb + node_update)
-        
-        return node_emb
+        aggregated = torch.zeros(num_nodes, H, device=node_emb.device, dtype=node_emb.dtype)
+        aggregated.scatter_add_(0, dst.unsqueeze(-1).expand(-1, H), msg)
+
+        if self.aggr == 'mean':
+            degree = torch.zeros(num_nodes, device=node_emb.device, dtype=node_emb.dtype)
+            degree.scatter_add_(0, dst, torch.ones(len(dst), device=node_emb.device, dtype=node_emb.dtype))
+            aggregated = aggregated / degree.clamp(min=1).unsqueeze(-1)
+
+        out = aggregated
+        if self.root is not None:
+            out = out + node_emb @ self.root
+        if self.bias is not None:
+            out = out + self.bias
+
+        if self.residual:
+            out = out + node_emb
+        if self.norm is not None:
+            out = self.norm(out)
+
+        return out
 
 
 # ============================================================================

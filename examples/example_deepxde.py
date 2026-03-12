@@ -28,8 +28,121 @@ import math
 
 # Import framework components
 from gnn_pde_v2.convenient import AutoRegisterModel
-from gnn_pde_v2.components import FourierFeatureEncoder, MLP
+from gnn_pde_v2.components import FourierFeatureEncoder
 from gnn_pde_v2.models.unified_model import Model
+
+
+class SinActivation(nn.Module):
+    """Sine activation used in some PINN variants."""
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return torch.sin(x)
+
+
+class DeepXDEFNN(nn.Module):
+    """Faithful DeepXDE-style fully-connected network.
+
+    Mirrors `deepxde/nn/pytorch/fnn.py`:
+    - ModuleList of Linear layers
+    - activation on all but the last linear
+    - optional per-layer dropout
+    - no LayerNorm
+    """
+
+    def __init__(
+        self,
+        layer_sizes: List[int],
+        activation: Union[str, List[str]],
+        kernel_initializer: str,
+        dropout_rate: Union[float, List[float]] = 0.0,
+        use_residual: bool = False,
+    ):
+        super().__init__()
+
+        self.layer_sizes = layer_sizes
+        self.kernel_initializer = kernel_initializer
+        self.use_residual = use_residual
+        self._input_transform = None
+        self._output_transform = None
+
+        if isinstance(activation, list):
+            if len(activation) != len(layer_sizes) - 1:
+                raise ValueError(
+                    "Total number of activation functions must match the number of linear layers."
+                )
+            self.activation = [self._get_activation(a) for a in activation]
+        else:
+            self.activation = self._get_activation(activation)
+
+        if isinstance(dropout_rate, list):
+            if len(dropout_rate) != len(layer_sizes) - 1:
+                raise ValueError(
+                    f"Number of dropout rates must be equal to {len(layer_sizes) - 1}"
+                )
+            self.dropout_rate = dropout_rate
+        else:
+            self.dropout_rate = [dropout_rate] * (len(layer_sizes) - 1)
+
+        self.linears = nn.ModuleList()
+        for i in range(1, len(layer_sizes)):
+            linear = nn.Linear(layer_sizes[i - 1], layer_sizes[i])
+            self.linears.append(linear)
+
+        self._initialize_weights()
+
+    def _get_activation(self, name: str):
+        mapping = {
+            "tanh": nn.Tanh(),
+            "relu": nn.ReLU(),
+            "gelu": nn.GELU(),
+            "sigmoid": nn.Sigmoid(),
+            "sin": SinActivation(),
+        }
+        if name not in mapping:
+            raise ValueError(f"Unsupported activation: {name}")
+        return mapping[name]
+
+    def _initialize_weights(self):
+        for linear in self.linears:
+            in_size = linear.weight.shape[1]
+            out_size = linear.weight.shape[0]
+
+            if self.kernel_initializer == "Glorot uniform":
+                limit = math.sqrt(6.0 / (in_size + out_size))
+                nn.init.uniform_(linear.weight, -limit, limit)
+            elif self.kernel_initializer == "Glorot normal":
+                nn.init.xavier_normal_(linear.weight)
+            elif self.kernel_initializer == "He normal":
+                nn.init.kaiming_normal_(linear.weight, mode='fan_in', nonlinearity='relu')
+            elif self.kernel_initializer == "He uniform":
+                nn.init.kaiming_uniform_(linear.weight, mode='fan_in', nonlinearity='relu')
+            else:
+                nn.init.xavier_uniform_(linear.weight)
+
+            if linear.bias is not None:
+                nn.init.zeros_(linear.bias)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        x = inputs
+        if self._input_transform is not None:
+            x = self._input_transform(x)
+
+        for j, linear in enumerate(self.linears[:-1]):
+            act = self.activation[j] if isinstance(self.activation, list) else self.activation
+            x_new = act(linear(x))
+            if self.dropout_rate[j] > 0:
+                x_new = torch.nn.functional.dropout(
+                    x_new, p=self.dropout_rate[j], training=self.training
+                )
+            if self.use_residual and x_new.shape == x.shape:
+                x = x + x_new
+            else:
+                x = x_new
+
+        x = self.linears[-1](x)
+        if self._output_transform is not None:
+            x = self._output_transform(inputs, x)
+        return x
 
 
 class DeepXDEModel(AutoRegisterModel, name='deepxde'):
@@ -111,54 +224,14 @@ class DeepXDEModel(AutoRegisterModel, name='deepxde'):
             self.fourier_encoder = None
             mlp_input_dim = input_dim
         
-        # Build main MLP using framework's MLP component
-        # Map activation names to framework convention
-        framework_activation = self._map_activation(activation)
-        
-        self.mlp = MLP(
-            in_dim=mlp_input_dim,
-            out_dim=output_dim,
-            hidden_dims=layer_sizes[1:-1],
-            activation=framework_activation,
-            use_layer_norm=use_layer_norm,
+        adjusted_layer_sizes = [mlp_input_dim] + layer_sizes[1:]
+        self.mlp = DeepXDEFNN(
+            layer_sizes=adjusted_layer_sizes,
+            activation=activation,
+            kernel_initializer=kernel_initializer,
+            dropout_rate=0.0,
+            use_residual=use_residual,
         )
-        
-        # Apply DeepXDE-style weight initialization
-        self._initialize_weights()
-    
-    def _map_activation(self, name: str) -> str:
-        """Map DeepXDE activation names to framework convention."""
-        mapping = {
-            "tanh": "tanh",
-            "sin": "tanh",  # Framework doesn't have sin, use tanh
-            "relu": "relu",
-            "gelu": "gelu",
-            "sigmoid": "tanh",  # Framework doesn't have sigmoid, use tanh
-        }
-        return mapping.get(name, "tanh")
-    
-    def _initialize_weights(self):
-        """Initialize weights following DeepXDE conventions."""
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                in_size = m.weight.shape[1]
-                out_size = m.weight.shape[0]
-                
-                if self.kernel_initializer == "Glorot uniform":
-                    # Xavier uniform initialization
-                    limit = math.sqrt(6.0 / (in_size + out_size))
-                    nn.init.uniform_(m.weight, -limit, limit)
-                elif self.kernel_initializer == "Glorot normal":
-                    nn.init.xavier_normal_(m.weight)
-                elif self.kernel_initializer == "He normal":
-                    nn.init.kaiming_normal_(m.weight, mode='fan_in', nonlinearity='relu')
-                elif self.kernel_initializer == "He uniform":
-                    nn.init.kaiming_uniform_(m.weight, mode='fan_in', nonlinearity='relu')
-                else:
-                    nn.init.xavier_uniform_(m.weight)
-                
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -175,40 +248,7 @@ class DeepXDEModel(AutoRegisterModel, name='deepxde'):
         if self.use_fourier_features and self.fourier_encoder is not None:
             x = self.fourier_encoder(x)
         
-        # Forward through MLP with optional residual connections
-        if self.use_residual:
-            # Apply layer-by-layer with residuals
-            layers = list(self.mlp.net.children())
-            
-            # Process layers
-            i = 0
-            current = x
-            while i < len(layers):
-                layer = layers[i]
-                
-                if isinstance(layer, nn.Linear):
-                    # This is a linear layer
-                    x_new = layer(current)
-                    
-                    # Check if next layers are activation/norm/dropout
-                    i += 1
-                    while i < len(layers) and not isinstance(layers[i], nn.Linear):
-                        x_new = layers[i](x_new)
-                        i += 1
-                    
-                    # Residual connection (if same dimensions)
-                    if current.shape == x_new.shape:
-                        current = current + x_new
-                    else:
-                        current = x_new
-                else:
-                    current = layer(current)
-                    i += 1
-            
-            return current
-        else:
-            # Standard forward through MLP
-            return self.mlp(x)
+        return self.mlp(x)
     
     def save_config(self):
         """Save model configuration."""
@@ -223,6 +263,10 @@ class DeepXDEModel(AutoRegisterModel, name='deepxde'):
             'use_residual': self.use_residual,
             'use_layer_norm': self.use_layer_norm,
         }
+
+
+# Backward-compatible alias expected by tests/examples.
+PINNModel = DeepXDEModel
 
 
 # ============================================================================

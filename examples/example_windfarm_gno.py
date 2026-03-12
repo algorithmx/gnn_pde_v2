@@ -28,7 +28,61 @@ from typing import Optional, Dict, Tuple, List
 # Import framework components
 from gnn_pde_v2.core.graph import GraphsTuple
 from gnn_pde_v2.convenient import AutoRegisterModel
-from gnn_pde_v2.components import MLP, GraphNetBlock
+from gnn_pde_v2.components import GraphNetBlock
+
+
+class WindFarmMLP(nn.Module):
+    """Wind-Farm-GNO faithful MLP semantics.
+
+    Matches `external_research/Wind-Farm-GNO/models/mlp.py`:
+    - hidden Dense layers defined by a list of sizes
+    - activation after each hidden layer
+    - optional output LayerNorm applied once at the end
+
+    Note: This is intentionally NOT using the framework MLP because the framework
+    applies LayerNorm after each hidden layer.
+    """
+
+    def __init__(
+        self,
+        in_dim: int,
+        hidden_dim: int,
+        out_dim: int,
+        num_hidden_layers: int,
+        activation: str = "relu",
+        layer_norm_out: bool = False,
+        dropout: float = 0.0,
+    ):
+        super().__init__()
+
+        if activation == "relu":
+            act_fn = nn.ReLU
+        elif activation == "gelu":
+            act_fn = nn.GELU
+        elif activation == "silu":
+            act_fn = nn.SiLU
+        elif activation == "tanh":
+            act_fn = nn.Tanh
+        else:
+            raise ValueError(f"Unknown activation: {activation}")
+
+        layers: list[nn.Module] = []
+        d = in_dim
+        for _ in range(num_hidden_layers):
+            layers.append(nn.Linear(d, hidden_dim))
+            layers.append(act_fn())
+            if dropout and dropout > 0:
+                layers.append(nn.Dropout(dropout))
+            d = hidden_dim
+
+        layers.append(nn.Linear(d, out_dim))
+        if layer_norm_out:
+            layers.append(nn.LayerNorm(out_dim))
+
+        self.net = nn.Sequential(*layers)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
 
 
 class WindFarmGNO(AutoRegisterModel, name='windfarm_gno'):
@@ -87,22 +141,24 @@ class WindFarmGNO(AutoRegisterModel, name='windfarm_gno'):
         
         # ==================== Stage 1: Turbine-to-Turbine ====================
         
-        # Edge encoder for T2T graph using framework's MLP
-        self.edge_encoder = MLP(
+        # Edge encoder for T2T graph (output-only LayerNorm semantics)
+        self.edge_encoder = WindFarmMLP(
             in_dim=num_edge_features,
+            hidden_dim=n_hidden,
             out_dim=n_hidden,
-            hidden_dims=[n_hidden] * n_layers,
+            num_hidden_layers=n_layers,
             activation='relu',
-            use_layer_norm=True,
+            layer_norm_out=True,
         )
-        
-        # Turbine encoder using framework's MLP
-        self.turbine_encoder = MLP(
+
+        # Turbine encoder (output-only LayerNorm semantics)
+        self.turbine_encoder = WindFarmMLP(
             in_dim=num_turbine_features,
+            hidden_dim=n_hidden,
             out_dim=n_hidden,
-            hidden_dims=[n_hidden] * n_layers,
+            num_hidden_layers=n_layers,
             activation='relu',
-            use_layer_norm=True,
+            layer_norm_out=True,
         )
         
         # Graph Network for turbine-to-turbine message passing
@@ -115,13 +171,14 @@ class WindFarmGNO(AutoRegisterModel, name='windfarm_gno'):
             num_iterations=num_iterations,
         )
         
-        # Turbine decoder using framework's MLP
-        self.turbine_decoder = MLP(
+        # Turbine decoder (Wind-Farm-GNO sets layer_norm_decoder=False; keep output LN disabled)
+        self.turbine_decoder = WindFarmMLP(
             in_dim=n_hidden,
+            hidden_dim=n_hidden,
             out_dim=turbine_output_dim,
-            hidden_dims=[n_hidden] * n_layers,
+            num_hidden_layers=n_layers,
             activation='relu',
-            use_layer_norm=True,
+            layer_norm_out=False,
         )
         
         # ==================== Stage 2: Probe-to-Turbine ====================
@@ -134,13 +191,14 @@ class WindFarmGNO(AutoRegisterModel, name='windfarm_gno'):
             n_hidden=n_hidden,
         )
         
-        # Probe decoder using framework's MLP
-        self.probe_decoder = MLP(
+        # Probe decoder (keep output LayerNorm disabled; original default layer_norm_decoder=False)
+        self.probe_decoder = WindFarmMLP(
             in_dim=n_hidden + num_probe_features,
+            hidden_dim=n_hidden,
             out_dim=probe_output_dim,
-            hidden_dims=[n_hidden] * n_layers,
+            num_hidden_layers=n_layers,
             activation='relu',
-            use_layer_norm=True,
+            layer_norm_out=False,
         )
     
     def forward(

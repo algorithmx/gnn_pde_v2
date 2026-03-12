@@ -41,7 +41,7 @@ class TestMLP:
     
     def test_different_activations(self, device):
         """Test different activation functions."""
-        for act in ['relu', 'gelu', 'silu', 'tanh']:
+        for act in ['relu', 'gelu', 'silu', 'tanh', 'sigmoid', 'sin']:
             mlp = MLP(10, 5, [10], activation=act).to(device)
             x = torch.randn(3, 10, device=device)
             out = mlp(x)
@@ -68,12 +68,46 @@ class TestMLP:
         """Test custom weight initialization."""
         import torch.nn.init as init
         
-        mlp = MLP(10, 5, [10], weight_init=init.zeros_).to(device)
+        mlp = MLP(10, 5, [10], weight_init=init.zeros_, use_layer_norm=False).to(device)
         
         # Check that weights are zeros
         for module in mlp.modules():
             if isinstance(module, nn.Linear):
                 assert torch.allclose(module.weight, torch.zeros_like(module.weight))
+
+    def test_final_norm_only(self, device):
+        """Test final-only normalization support."""
+        mlp = MLP(
+            10, 5, [12, 12],
+            activation='relu',
+            norm=None,
+            final_norm='layer',
+        ).to(device)
+
+        layer_norms = [m for m in mlp.modules() if isinstance(m, nn.LayerNorm)]
+        assert len(layer_norms) == 1
+        assert tuple(layer_norms[0].normalized_shape) == (5,)
+
+    def test_legacy_use_layer_norm_compat(self, device):
+        """Test that legacy use_layer_norm still maps to hidden LayerNorm."""
+        mlp = MLP(10, 5, [12, 12], use_layer_norm=True).to(device)
+        layer_norms = [m for m in mlp.modules() if isinstance(m, nn.LayerNorm)]
+        assert len(layer_norms) == 2
+        assert tuple(layer_norms[0].normalized_shape) == (12,)
+        assert tuple(layer_norms[1].normalized_shape) == (12,)
+
+    def test_custom_linear_factory_conv2d(self, device):
+        """Test custom linear_factory for pointwise conv channel MLPs."""
+        mlp = MLP(
+            4, 6, [8],
+            activation='gelu',
+            norm=None,
+            linear_factory=lambda a, b: nn.Conv2d(a, b, kernel_size=1),
+            use_layer_norm=False,
+        ).to(device)
+        x = torch.randn(2, 4, 16, 16, device=device)
+        out = mlp(x)
+        assert out.shape == (2, 6, 16, 16)
     
     def test_make_mlp_encoder(self, device):
         """Test make_mlp_encoder helper."""
