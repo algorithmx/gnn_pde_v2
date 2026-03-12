@@ -160,7 +160,7 @@ class PDENetData(Data):
 # Network Interface (from DeepXDE)
 # ============================================================================
 
-class NN(ABC):
+class NN(nn.Module, ABC):
     """
     Abstract base class for DeepXDE-style Neural Networks.
     """

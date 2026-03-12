@@ -11,7 +11,7 @@ from dataclasses import replace
 
 # Import only what we need from core and components
 from gnn_pde_v2 import GraphsTuple
-from gnn_pde_v2.components import MLP, Residual, GraphNetBlock
+from gnn_pde_v2.components import MLP, GraphNetBlock
 
 
 class MinimalMeshGraphNets(nn.Module):
@@ -50,15 +50,15 @@ class MinimalMeshGraphNets(nn.Module):
             activation=activation,
         )
         
-        # Processor with explicit residual
+        # Processor blocks (without Residual wrapper - handle residual manually)
         self.processor_blocks = nn.ModuleList([
-            Residual(GraphNetBlock(
+            GraphNetBlock(
                 node_dim=hidden_size,
                 edge_dim=hidden_size,
                 global_dim=None,
                 hidden_dim=hidden_size,
                 activation=activation,
-            ))
+            )
             for _ in range(message_passing_steps)
         ])
         
@@ -88,16 +88,13 @@ class MinimalMeshGraphNets(nn.Module):
         latent = replace(graph, nodes=nodes, edges=edges)
         
         for block in self.processor_blocks:
-            # Residual wrapper handles the skip connection
-            new_nodes = block(latent.nodes)
-            # For edges, we do explicit residual
-            processed = block.module  # Get inner GraphNetBlock
-            temp_graph = replace(latent, nodes=new_nodes)
-            new_graph = processed(temp_graph)
+            # Apply GraphNetBlock (returns GraphsTuple with replace())
+            processed = block(latent)
+            # MeshGraphNets-style residual: add to both nodes and edges
             latent = replace(
                 latent,
-                nodes=latent.nodes + new_graph.nodes,
-                edges=latent.edges + new_graph.edges,
+                nodes=latent.nodes + processed.nodes,
+                edges=latent.edges + processed.edges,
             )
         
         # Decode

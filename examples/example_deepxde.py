@@ -27,12 +27,12 @@ from typing import List, Optional, Callable, Dict, Union
 import math
 
 # Import framework components
-from gnn_pde_v2.core.base import BaseModel
+from gnn_pde_v2.convenient import AutoRegisterModel
 from gnn_pde_v2.components import FourierFeatureEncoder, MLP
 from gnn_pde_v2.models.unified_model import Model
 
 
-class DeepXDEModel(BaseModel):
+class DeepXDEModel(AutoRegisterModel, name='deepxde'):
     """
     DeepXDE-style Physics-Informed Neural Network using gnn_pde_v2 framework.
     
@@ -519,7 +519,7 @@ def example_usage():
     
     print("\n" + "=" * 60)
     print("Model registered as:", model1._model_name)
-    print("Available models:", BaseModel.list_models())
+    print("Available models:", AutoRegisterModel.list_models())
     print("=" * 60)
     
     print("\n" + "=" * 60)

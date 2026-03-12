@@ -26,11 +26,11 @@ import numpy as np
 from typing import Optional
 
 # Import framework components
-from gnn_pde_v2.core.base import BaseModel
+from gnn_pde_v2.convenient import AutoRegisterModel
 from gnn_pde_v2.components import MLP
 
 
-class Transolver(BaseModel):
+class Transolver(AutoRegisterModel, name='transolver'):
     """
     Transolver implementation using gnn_pde_v2 framework components.
     
@@ -417,7 +417,7 @@ def example_usage():
     
     print("\n" + "=" * 60)
     print("Model registered as:", model._model_name)
-    print("Available models:", BaseModel.list_models())
+    print("Available models:", AutoRegisterModel.list_models())
     print("=" * 60)
     
     return model, x, pos, output

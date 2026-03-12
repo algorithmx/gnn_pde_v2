@@ -25,11 +25,11 @@ import torch.nn as nn
 from typing import Tuple, List, Union
 
 # Import framework components
-from gnn_pde_v2.core.base import BaseModel
+from gnn_pde_v2.convenient import AutoRegisterModel
 from gnn_pde_v2.components import FNOProcessor, SpectralConv
 
 
-class NeuralOperatorFNO(BaseModel):
+class NeuralOperatorFNO(AutoRegisterModel, name='neuraloperator_fno'):
     """
     Precise equivalent of neuraloperator's FNO model using gnn_pde_v2 framework.
     
@@ -298,7 +298,7 @@ class FNOBlockFramework(nn.Module):
 # Alternative: Simple FNO using framework's FNOProcessor
 # ============================================================================
 
-class SimpleFNO(BaseModel):
+class SimpleFNO(AutoRegisterModel, name='simple_fno'):
     """
     Simplified FNO using framework's FNOProcessor directly.
     
@@ -382,7 +382,7 @@ def example_usage():
     
     print("\n" + "=" * 60)
     print("Model registered as:", model._model_name)
-    print("Available models:", BaseModel.list_models())
+    print("Available models:", AutoRegisterModel.list_models())
     print("=" * 60)
     
     # Also demonstrate SimpleFNO

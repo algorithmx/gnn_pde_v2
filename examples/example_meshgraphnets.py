@@ -26,12 +26,13 @@ import torch.nn as nn
 from typing import Optional
 
 # Import framework components
+from dataclasses import replace
 from gnn_pde_v2.core.graph import GraphsTuple
-from gnn_pde_v2.core.base import BaseModel
+from gnn_pde_v2.convenient import AutoRegisterModel
 from gnn_pde_v2.components import GraphNetBlock, MLP, MLPDecoder
 
 
-class MeshGraphNets(BaseModel):
+class MeshGraphNets(AutoRegisterModel, name='meshgraphnets'):
     """
     MeshGraphNets implementation using gnn_pde_v2 framework components.
     
@@ -134,7 +135,7 @@ class MeshGraphNets(BaseModel):
             [N, output_size] output predictions (typically acceleration)
         """
         # Encode: Project to latent dimension
-        latent = graph.replace(
+        latent = replace(graph,
             nodes=self.node_encoder(graph.nodes),
             edges=self.edge_encoder(graph.edges),
         )
@@ -146,7 +147,7 @@ class MeshGraphNets(BaseModel):
             processed = block(latent)
             
             # Residual connection (characteristic of MeshGraphNets)
-            latent = latent.replace(
+            latent = replace(latent,
                 nodes=latent.nodes + processed.nodes,
                 edges=latent.edges + processed.edges,
             )
@@ -274,7 +275,7 @@ def example_usage():
     
     print("\n" + "=" * 60)
     print("Model registered as:", model._model_name)
-    print("Available models:", BaseModel.list_models())
+    print("Available models:", AutoRegisterModel.list_models())
     print("=" * 60)
     
     return model, graph, output

@@ -75,6 +75,10 @@ class GraphsTuple:
         if self.edges is not None:
             return self.edges.device
         return torch.device('cpu')
+    
+    def replace(self, **kwargs) -> 'GraphsTuple':
+        """Return a new GraphsTuple with replaced fields."""
+        return replace(self, **kwargs)
 
 
 def batch_graphs(graphs: List[GraphsTuple]) -> GraphsTuple:

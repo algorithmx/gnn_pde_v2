@@ -27,11 +27,11 @@ from typing import Optional, Dict, Tuple, List
 
 # Import framework components
 from gnn_pde_v2.core.graph import GraphsTuple
-from gnn_pde_v2.core.base import BaseModel
+from gnn_pde_v2.convenient import AutoRegisterModel
 from gnn_pde_v2.components import MLP, GraphNetBlock
 
 
-class WindFarmGNO(BaseModel):
+class WindFarmGNO(AutoRegisterModel, name='windfarm_gno'):
     """
     Wind-Farm-GNO implementation using gnn_pde_v2 framework components.
     
@@ -447,7 +447,7 @@ def example_usage():
     
     print("\n" + "=" * 60)
     print("Model registered as:", model._model_name)
-    print("Available models:", BaseModel.list_models())
+    print("Available models:", AutoRegisterModel.list_models())
     print("=" * 60)
     
     return model, output
