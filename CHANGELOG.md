@@ -19,12 +19,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `gnn_pde_v2.layers`
   - `gnn_pde_v2.initializers`
   - `gnn_pde_v2.utils.aggregation`
+- Removed the legacy duplicate implementation directories after consolidation:
+  - `encoders/`
+  - `processors/`
+  - `decoders/`
 
 ### Changed
 
 - Documentation now reflects the post-shim canonical API only.
 - The package tree now exposes only the lean `core`, canonical `components`,
   optional `convenient` API, and remaining non-deprecated utility/example code.
+- Completed internal consolidation so reusable encoder, processor, and decoder
+  implementations now live only under `components/`.
+- Canonicalized `MLPEncoder` and `MLPMeshEncoder` under `gnn_pde_v2.components`
+  and updated `models/gnn_model.py` to use the canonical wrapper implementation.
 
 ### Migration Notes
 

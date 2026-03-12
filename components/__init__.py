@@ -14,7 +14,7 @@ Example:
             self.processor = Residual(GraphNetBlock(128, 128))
 """
 
-from .encoders import MLP, make_mlp_encoder
+from .encoders import MLP, MLPEncoder, MLPMeshEncoder, make_mlp_encoder
 from .fourier_encoder import FourierFeatureEncoder
 from .layers import Residual
 from .processors import GraphNetBlock, GraphNetProcessor
@@ -26,6 +26,8 @@ from .fno import FNOProcessor, SpectralConv, FNOBlock
 __all__ = [
     # Encoders
     "MLP",
+    "MLPEncoder",
+    "MLPMeshEncoder",
     "make_mlp_encoder",
     "FourierFeatureEncoder",
     # Layers
