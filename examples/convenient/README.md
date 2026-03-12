@@ -29,8 +29,7 @@ from gnn_pde_v2.convenient import (
 )
 
 # Define model with auto-registration
-@AutoRegisterModel(name='my_model')
-class MyModel(nn.Module):
+class MyModel(AutoRegisterModel, name='my_model'):
     ...
 
 # Create via config

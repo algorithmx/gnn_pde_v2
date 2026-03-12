@@ -27,12 +27,11 @@ from typing import Optional, Dict, Tuple, List
 
 # Import framework components
 from gnn_pde_v2.core.graph import GraphsTuple
-from gnn_pde_v2.core.base_model import BaseModel
-from gnn_pde_v2.encoders.mlp_encoder import MLP
-from gnn_pde_v2.processors.graphnet_block import GraphNetBlock
+from gnn_pde_v2.core.base import BaseModel
+from gnn_pde_v2.components import MLP, GraphNetBlock
 
 
-class WindFarmGNO(BaseModel, model_name='windfarm_gno'):
+class WindFarmGNO(BaseModel):
     """
     Wind-Farm-GNO implementation using gnn_pde_v2 framework components.
     

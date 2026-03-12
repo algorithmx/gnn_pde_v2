@@ -12,7 +12,7 @@ A clean implementation of the Encode-Process-Decode architecture for PDE-GNNs wi
 - **Dual API Design**: Lean core API + optional convenient high-level API
 - **Component-Based**: Reusable building blocks (MLP, GraphNetBlock, FNOBlock, etc.)
 - **Research Reproductions**: 7+ paper implementations with exact equivalence
-- **Auto-Registration**: Models self-register for easy discovery
+- **Optional Auto-Registration**: Convenience models can self-register for config-based instantiation
 - **Flexible Dependencies**: Graceful fallbacks when optional dependencies unavailable
 - **Comprehensive Testing**: Full test suite with pytest
 
@@ -27,34 +27,25 @@ The framework provides two usage patterns:
 
 ```
 gnn_pde_v2/
-├── core/                    # Core data structures and base classes
+├── core/                    # Minimal core primitives
 │   ├── graph.py            # GraphsTuple, batching utilities
-│   ├── base.py             # BaseModel for auto-registration
-│   ├── base_model.py       # Enhanced BaseModel with registry
+│   ├── base.py             # Lean BaseModel marker class
 │   └── functional.py       # Scatter operations, aggregation
-├── components/              # Reusable building blocks (lean API)
-│   ├── encoders/           # Input encoders
-│   │   ├── mlp_encoder.py  # Standard MLP encoder
-│   │   └── fourier_encoder.py  # Fourier feature encoder
-│   ├── processors/         # Message passing and processing
-│   │   ├── graphnet_block.py    # GraphNet message passing
-│   │   ├── transformer_block.py # Attention mechanisms
-│   │   └── fno_block.py          # Fourier neural operators
-│   ├── decoders/           # Output decoders
-│   │   ├── mlp_decoder.py  # Standard MLP decoder
-│   │   └── probe_decoder.py     # Arbitrary query point decoder
-│   ├── layers/             # Utility layers
-│   │   └── residual.py     # Residual connections
+├── components/              # Reusable building blocks (canonical lean API)
+│   ├── encoders.py         # MLP and encoder helpers
+│   ├── processors.py       # GraphNetBlock and GraphNetProcessor
+│   ├── decoders.py         # MLPDecoder variants
+│   ├── layers.py           # Residual layers
 │   ├── fno.py              # FNO components (SpectralConv, etc.)
 │   ├── transformer.py      # Transformer components
 │   └── probe.py            # Probe-based components
 ├── convenient/              # High-level API (optional)
-│   ├── registry.py         # Auto-registration decorators
+│   ├── registry.py         # Auto-registration base class
 │   ├── config.py           # Pydantic configurations
 │   ├── builder.py          # Configuration-based model building
 │   ├── training.py         # Unified training wrapper
 │   ├── aggregation.py      # Extended aggregation functions
-│   └── initializers/       # Weight initialization utilities
+│   └── initializers.py     # Weight initialization utilities
 ├── models/                  # Complete model implementations
 │   ├── encode_process_decode.py  # Clean EPD model
 │   ├── gnn_model.py             # GNN models (GraphNet, MeshGraphNet)
@@ -67,11 +58,9 @@ gnn_pde_v2/
 │   ├── example_unisolver.py          # Unisolver (ICML 2024)
 │   ├── example_windfarm_gno.py       # WindFarm GNO (2025)
 │   └── example_graph_pde_gno.py      # Graph-PDE GNO (2020)
-├── config/                  # Deprecated - use convenient.config
 ├── utils/                   # Utility functions
 │   ├── graph_utils.py      # Graph processing utilities
-│   ├── spatial_utils.py    # Spatial computations
-│   └── aggregation.py     # Basic aggregation functions
+│   └── spatial_utils.py    # Spatial computations
 └── tests/                   # Comprehensive test suite
     ├── test_core.py        # Core functionality tests
     ├── test_components.py  # Component tests
@@ -85,21 +74,29 @@ gnn_pde_v2/
 
 ```python
 from gnn_pde_v2 import GraphsTuple
-from gnn_pde_v2.components import MLP, GraphNetBlock, Residual
+from gnn_pde_v2.components import MLP, GraphNetProcessor, MLPDecoder
 import torch
 
 # Build model from components
 class MyModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.encoder = MLP(in_dim=5, out_dim=128, hidden_dims=[128, 128])
-        self.processor = Residual(GraphNetBlock(128, 128, n_layers=4))
-        self.decoder = MLP(in_dim=128, out_dim=2, hidden_dims=[128, 64])
+        self.node_encoder = MLP(in_dim=5, out_dim=128, hidden_dims=[128])
+        self.edge_encoder = MLP(in_dim=3, out_dim=128, hidden_dims=[128])
+        self.processor = GraphNetProcessor(
+            node_dim=128,
+            edge_dim=128,
+            n_layers=4,
+        )
+        self.decoder = MLPDecoder(node_dim=128, out_dim=2, hidden_dims=[128, 64])
     
     def forward(self, graph):
-        x = self.encoder(graph.nodes)
-        x = self.processor(graph, x)
-        return self.decoder(x)
+        latent = graph.replace(
+            nodes=self.node_encoder(graph.nodes),
+            edges=self.edge_encoder(graph.edges),
+        )
+        processed = self.processor(latent)
+        return self.decoder(processed)
 
 # Create graph
 graph = GraphsTuple(
@@ -119,7 +116,7 @@ output = model(graph)  # [10, 2]
 ### Convenient API (Optional)
 
 ```python
-from gnn_pde_v2.convenient import GNNConfig, ConfigBuilder, Model
+from gnn_pde_v2.convenient import GNNConfig, ConfigBuilder, TrainingConfig
 
 # Define config
 config = GNNConfig(
@@ -128,12 +125,12 @@ config = GNNConfig(
     edge_in_dim=3,
     out_dim=2,
     hidden_dim=128,
-    n_layers=4,
+    n_message_passing=4,
 )
 
 # Build and train model
 builder = ConfigBuilder(config)
-model = builder.build_unified_model()
+model = builder.build_unified_model(TrainingConfig())
 
 # Training step
 metrics = model.train_step((graph, target))
@@ -146,6 +143,7 @@ metrics = model.train_step((graph, target))
 | Component | Description | Usage |
 |-----------|-------------|-------|
 | `MLP` | Standard multi-layer perceptron | Encoder/Decoder |
+| `FourierFeatureEncoder` | Random Fourier feature lifting | Encoder |
 | `GraphNetBlock` | Graph message passing block | Processor |
 | `TransformerBlock` | Multi-head attention block | Processor |
 | `FNOBlock` | Fourier neural operator block | Processor |

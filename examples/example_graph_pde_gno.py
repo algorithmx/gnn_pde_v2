@@ -27,11 +27,11 @@ from typing import Optional, Tuple
 
 # Import framework components
 from gnn_pde_v2.core.graph import GraphsTuple
-from gnn_pde_v2.core.base_model import BaseModel
-from gnn_pde_v2.encoders.mlp_encoder import MLP
+from gnn_pde_v2.core.base import BaseModel
+from gnn_pde_v2.components import MLP
 
 
-class GraphPDE_GNO(BaseModel, model_name='graph_pde_gno'):
+class GraphPDE_GNO(BaseModel):
     """
     Graph-PDE GNO implementation using gnn_pde_v2 framework components.
     

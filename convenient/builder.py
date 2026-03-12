@@ -4,10 +4,11 @@ Configuration builder for easy model instantiation.
 
 from typing import Optional, Dict, Any
 import torch
+import torch.nn as nn
 import torch.optim as optim
 
 from .registry import AutoRegisterModel
-from .training import Model, LossFunction
+from .training import Model
 from .config import ModelConfig, TrainingConfig, FNOConfig, GNNConfig
 
 
@@ -34,7 +35,7 @@ class ConfigBuilder:
     def __init__(self, model_config: ModelConfig):
         self.model_config = model_config
     
-    def build_model(self, device: Optional[str] = None) -> AutoRegisterModel:
+    def build_model(self, device: Optional[str] = None) -> nn.Module:
         """
         Build model from configuration.
         
@@ -50,8 +51,10 @@ class ConfigBuilder:
             model = self._build_gnn(config)
         else:
             # Generic instantiation
-            model_class = AutoRegisterModel._registry.get(model_type)
-            model = model_class(**config.dict(exclude={'model_type'}))
+            model = AutoRegisterModel.create(
+                model_type,
+                **config.dict(exclude={'model_type'})
+            )
         
         if device:
             model = model.to(self._get_device(device))
@@ -100,7 +103,7 @@ class ConfigBuilder:
             optimizer=optimizer,
         )
     
-    def _build_fno(self, config: FNOConfig) -> AutoRegisterModel:
+    def _build_fno(self, config: FNOConfig) -> nn.Module:
         """Build FNO model."""
         from ..models.fno_model import FNO, TFNO, AFNO
         
@@ -135,13 +138,12 @@ class ConfigBuilder:
         else:
             raise ValueError(f"Unknown FNO type: {config.model_type}")
     
-    def _build_gnn(self, config: GNNConfig) -> AutoRegisterModel:
+    def _build_gnn(self, config: GNNConfig) -> nn.Module:
         """Build GNN model."""
-        from ..models.gnn_model import GraphNet, MeshGraphNet
-        from ..processors.transformer_block import TransformerProcessor
-        from ..encoders.mlp_encoder import MLPMeshEncoder
-        from ..decoders.mlp_decoder import MLPDecoder
+        from ..components.decoders import MLPDecoder
+        from ..components.transformer import TransformerProcessor
         from ..models.encode_process_decode import EncodeProcessDecode
+        from ..models.gnn_model import GraphNet, MeshGraphNet, _MeshEncoder
         
         if config.model_type == 'graphnet':
             return GraphNet(
@@ -166,7 +168,7 @@ class ConfigBuilder:
             )
         elif config.model_type == 'transformer':
             # Build EPD with transformer processor
-            encoder = MLPMeshEncoder(
+            encoder = _MeshEncoder(
                 node_in_dim=config.node_in_dim,
                 edge_in_dim=config.edge_in_dim,
                 global_in_dim=None,

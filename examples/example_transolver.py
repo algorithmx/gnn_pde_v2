@@ -26,11 +26,11 @@ import numpy as np
 from typing import Optional
 
 # Import framework components
-from gnn_pde_v2.core.base_model import BaseModel
-from gnn_pde_v2.encoders.mlp_encoder import MLP
+from gnn_pde_v2.core.base import BaseModel
+from gnn_pde_v2.components import MLP
 
 
-class Transolver(BaseModel, model_name='transolver'):
+class Transolver(BaseModel):
     """
     Transolver implementation using gnn_pde_v2 framework components.
     

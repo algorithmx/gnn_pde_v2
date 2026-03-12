@@ -27,13 +27,12 @@ from typing import List, Optional, Callable, Dict, Union
 import math
 
 # Import framework components
-from gnn_pde_v2.core.base_model import BaseModel
-from gnn_pde_v2.encoders.mlp_encoder import MLP
-from gnn_pde_v2.encoders.fourier_encoder import FourierFeatureEncoder
+from gnn_pde_v2.core.base import BaseModel
+from gnn_pde_v2.components import FourierFeatureEncoder, MLP
 from gnn_pde_v2.models.unified_model import Model
 
 
-class DeepXDEModel(BaseModel, model_name='deepxde'):
+class DeepXDEModel(BaseModel):
     """
     DeepXDE-style Physics-Informed Neural Network using gnn_pde_v2 framework.
     

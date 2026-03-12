@@ -17,8 +17,7 @@ from gnn_pde_v2 import GraphsTuple
 from gnn_pde_v2.components import MLP, GraphNetBlock
 
 
-@AutoRegisterModel(name='meshgraphnets_easy')
-class EasyMeshGraphNets(nn.Module):
+class EasyMeshGraphNets(AutoRegisterModel, name='meshgraphnets_easy'):
     """
     MeshGraphNets with auto-registration.
     
@@ -115,7 +114,7 @@ def example_with_config():
     # we'd need to register it properly or instantiate directly
     print("\n" + "=" * 60)
     print("Key features of this convenient approach:")
-    print("  - Auto-registration via decorator")
+    print("  - Auto-registration via subclassing")
     print("  - Pydantic config validation")
     print("  - ConfigBuilder for instantiation")
     print("  - Good for quick experimentation")

@@ -27,13 +27,11 @@ from typing import Optional
 
 # Import framework components
 from gnn_pde_v2.core.graph import GraphsTuple
-from gnn_pde_v2.core.base_model import BaseModel
-from gnn_pde_v2.encoders.mlp_encoder import MLPMeshEncoder
-from gnn_pde_v2.processors.graphnet_block import GraphNetBlock
-from gnn_pde_v2.decoders.mlp_decoder import MLPDecoder
+from gnn_pde_v2.core.base import BaseModel
+from gnn_pde_v2.components import GraphNetBlock, MLP, MLPDecoder
 
 
-class MeshGraphNets(BaseModel, model_name='meshgraphnets'):
+class MeshGraphNets(BaseModel):
     """
     MeshGraphNets implementation using gnn_pde_v2 framework components.
     
@@ -87,12 +85,16 @@ class MeshGraphNets(BaseModel, model_name='meshgraphnets'):
         self.hidden_size = hidden_size
         self.message_passing_steps = message_passing_steps
         
-        # Encoder: Separate MLPs for nodes and edges using framework component
-        self.encoder = MLPMeshEncoder(
-            node_in_dim=node_input_size,
-            edge_in_dim=edge_input_size,
-            global_in_dim=None,  # MeshGraphNets doesn't use global features
-            latent_dim=hidden_size,
+        # Encoder: Separate node and edge MLPs using canonical components
+        self.node_encoder = MLP(
+            in_dim=node_input_size,
+            out_dim=hidden_size,
+            hidden_dims=[hidden_size],  # 2-layer MLP: in->hidden->out
+            activation=activation,
+        )
+        self.edge_encoder = MLP(
+            in_dim=edge_input_size,
+            out_dim=hidden_size,
             hidden_dims=[hidden_size],  # 2-layer MLP: in->hidden->out
             activation=activation,
         )
@@ -132,7 +134,10 @@ class MeshGraphNets(BaseModel, model_name='meshgraphnets'):
             [N, output_size] output predictions (typically acceleration)
         """
         # Encode: Project to latent dimension
-        latent = self.encoder(graph)
+        latent = graph.replace(
+            nodes=self.node_encoder(graph.nodes),
+            edges=self.edge_encoder(graph.edges),
+        )
         
         # Process: Message passing with residual connections
         for block in self.processor_blocks:
@@ -155,8 +160,8 @@ class MeshGraphNets(BaseModel, model_name='meshgraphnets'):
         """Save model configuration."""
         return {
             'model_type': 'meshgraphnets',
-            'node_input_size': self.encoder.node_encoder.net[0].in_features,
-            'edge_input_size': self.encoder.edge_encoder.net[0].in_features,
+            'node_input_size': self.node_encoder.net[0].in_features,
+            'edge_input_size': self.edge_encoder.net[0].in_features,
             'output_size': self.decoder.mlp.net[-1].out_features,
             'hidden_size': self.hidden_size,
             'message_passing_steps': self.message_passing_steps,

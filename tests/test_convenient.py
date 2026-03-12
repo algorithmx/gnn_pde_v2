@@ -150,8 +150,7 @@ class TestConfigBuilder:
         # Clear and register a test model
         AutoRegisterModel._registry.clear()
         
-        @AutoRegisterModel(name='test_build')
-        class TestBuildModel(nn.Module):
+        class TestBuildModel(AutoRegisterModel, name='test_build'):
             def __init__(self, hidden_dim=64):
                 super().__init__()
                 self.hidden_dim = hidden_dim

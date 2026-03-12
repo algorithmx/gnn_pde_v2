@@ -15,6 +15,7 @@ Example:
 """
 
 from .encoders import MLP, make_mlp_encoder
+from .fourier_encoder import FourierFeatureEncoder
 from .layers import Residual
 from .processors import GraphNetBlock, GraphNetProcessor
 from .decoders import MLPDecoder, IndependentMLPDecoder
@@ -26,6 +27,7 @@ __all__ = [
     # Encoders
     "MLP",
     "make_mlp_encoder",
+    "FourierFeatureEncoder",
     # Layers
     "Residual",
     # Processors

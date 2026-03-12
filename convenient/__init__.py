@@ -16,8 +16,7 @@ Example with convenient API:
         AutoRegisterModel, ModelConfig, ConfigBuilder, Model
     )
     
-    @AutoRegisterModel(name='my_model')
-    class MyModel(nn.Module):
+    class MyModel(AutoRegisterModel, name='my_model'):
         ...
     
     config = ModelConfig(model_type='my_model', hidden_dim=128)

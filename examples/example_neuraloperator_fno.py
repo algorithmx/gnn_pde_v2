@@ -25,11 +25,11 @@ import torch.nn as nn
 from typing import Tuple, List, Union
 
 # Import framework components
-from gnn_pde_v2.core.base_model import BaseModel
-from gnn_pde_v2.processors.fno_block import FNOProcessor, SpectralConv
+from gnn_pde_v2.core.base import BaseModel
+from gnn_pde_v2.components import FNOProcessor, SpectralConv
 
 
-class NeuralOperatorFNO(BaseModel, model_name='neuraloperator_fno'):
+class NeuralOperatorFNO(BaseModel):
     """
     Precise equivalent of neuraloperator's FNO model using gnn_pde_v2 framework.
     
@@ -298,7 +298,7 @@ class FNOBlockFramework(nn.Module):
 # Alternative: Simple FNO using framework's FNOProcessor
 # ============================================================================
 
-class SimpleFNO(BaseModel, model_name='simple_fno'):
+class SimpleFNO(BaseModel):
     """
     Simplified FNO using framework's FNOProcessor directly.
     

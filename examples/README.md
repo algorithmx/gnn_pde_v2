@@ -321,19 +321,30 @@ output = edge_conv(node_features, edge_index)
 
 ## Design Patterns
 
-### 1. BaseModel Registration
+### 1. Lean `BaseModel` vs optional registration
 
-All examples inherit from `BaseModel` for automatic registration:
+Top-level research examples use the lean `BaseModel` marker without registry behavior:
 
 ```python
-class MyModel(BaseModel, model_name='my_model'):
+from gnn_pde_v2.core.base import BaseModel
+
+class MyModel(BaseModel):
+    def __init__(self, ...):
+        super().__init__()
+        ...
+```
+
+If config-based registration is desired, use the optional convenient API:
+
+```python
+from gnn_pde_v2.convenient import AutoRegisterModel
+
+class MyModel(AutoRegisterModel, name='my_model'):
     def __init__(self, ...):
         super().__init__()
         ...
 
-# Later access
-from gnn_pde_v2.core.base_model import BaseModel
-model_class = BaseModel.get_model('my_model')
+model = AutoRegisterModel.create('my_model')
 ```
 
 ### 2. Encoder-Processor-Decoder Pattern

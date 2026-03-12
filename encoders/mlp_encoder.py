@@ -2,11 +2,13 @@
 MLP-based encoders for node and edge features.
 """
 
-from typing import Optional, List, Union
+from typing import Callable, Optional, List, Union
 import torch
 import torch.nn as nn
 from ..core.graph import GraphsTuple
-from ..initializers import Initializer, get_initializer
+from ..convenient.initializers import get_initializer
+
+Initializer = Callable
 
 
 class MLP(nn.Module):
