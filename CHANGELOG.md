@@ -5,6 +5,22 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.1] - 2026-03-13
+
+### Added
+
+- **`pre_activation` option in `core.MLP`**: Supports pre-activation pattern (Activation → Linear per layer)
+  useful for architectures like AdaLN modulation networks in UniSolver
+
+### Changed
+
+- **Refactored DeepXDE examples** to use framework components:
+  - `example_deepxde_style.py`: Uses `core.MLP`, `FourierFeatureEncoder`, `get_initializer`
+  - `example_deepxde.py`: Removed redundant `FNN` class, uses `MLP` directly, added `DeepONet`
+- **Replaced custom MLP implementations** with framework `core.MLP`:
+  - `components/transformer.py`: `TransformerBlock.mlp`
+  - `examples/example_graph_pde_gno.py`: `GraphConvBlock.edge_weight_net`
+
 ## [2.3.0] - 2026-03-12
 
 ### Added

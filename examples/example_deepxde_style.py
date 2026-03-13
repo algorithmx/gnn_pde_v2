@@ -1,649 +1,478 @@
 """
-Example: DeepXDE-Style Unified API
+Example: DeepXDE-style Physics-Informed Neural Network
 
-This example recreates the DeepXDE unified API from:
+This example recreates the DeepXDE model interface from:
 https://github.com/lululxvi/deepxde
 
-Reference: Lu et al. "DeepXDE: A Deep Learning Library for Solving Differential Equations" (2021)
+Original Work Reference:
+------------------------
+Lu, L., Meng, X., Mao, Z., & Karniadakis, G. E. (2021).
+"DeepXDE: A deep learning library for solving differential equations."
+SIAM Review, 63(1), 208-228.
+Paper: https://doi.org/10.1137/19M1274067
 
-Key characteristics:
-1. Unified Model(data, net) API
-2. Separation of Data (sampling, losses) and Network (architecture)
-3. Common training loop for different methods (PINN, DeepONet, FNO)
-4. Backend-agnostic design (though we focus on PyTorch)
+Key Innovation:
+---------------
+DeepXDE provides a unified framework for solving various types of PDEs
+using physics-informed neural networks (PINNs).
+
+This implementation uses the gnn_pde_v2 framework components:
+- core.MLP for the fully-connected network
+- components.FourierFeatureEncoder for high-frequency features
+- convenient.initializers for weight initialization
+- convenient.Model for training wrapper
 """
 
 import torch
 import torch.nn as nn
-from typing import Optional, Callable, Union, Dict, Any
-from dataclasses import dataclass
-from abc import ABC, abstractmethod
+import numpy as np
+from typing import List, Optional, Callable, Dict, Union
+import math
+
+# Import framework components
+from gnn_pde_v2.core import MLP
+from gnn_pde_v2.components import FourierFeatureEncoder
+from gnn_pde_v2.convenient import AutoRegisterModel, get_initializer, Model
 
 
-# ============================================================================
-# Data Interface (from DeepXDE)
-# ============================================================================
-
-class Data(ABC):
+class DeepXDEModel(AutoRegisterModel, name='deepxde'):
     """
-    Abstract base class for DeepXDE-style Data.
-    
-    In DeepXDE, Data handles:
-    - Training data sampling
-    - Loss computation
-    - Test data generation
-    """
-    
-    @abstractmethod
-    def losses(self, targets, outputs, loss_fn, inputs, model):
-        """
-        Compute losses.
-        
-        Args:
-            targets: Target values
-            outputs: Model outputs
-            loss_fn: Loss function
-            inputs: Model inputs
-            model: The Model instance
-            
-        Returns:
-            List of losses
-        """
-        pass
-    
-    @abstractmethod
-    def train_next_batch(self, batch_size: Optional[int] = None):
-        """Get next training batch."""
-        pass
-    
-    @abstractmethod
-    def test(self):
-        """Get test data."""
-        pass
+    DeepXDE-style Physics-Informed Neural Network using gnn_pde_v2 framework.
 
+    Uses framework's MLP for the neural network backbone and
+    FourierFeatureEncoder for high-frequency PDEs.
 
-class TimePDE(Data):
+    Architecture:
+        Input x ∈ R^d (spatial/temporal coordinates)
+            ↓
+        [Optional] Fourier Feature Mapping:
+            Uses framework's FourierFeatureEncoder
+            x → [sin(2πBx), cos(2πBx)]
+            Helps with high-frequency PDEs
+            ↓
+        Hidden Layers: Framework's MLP
+            - Configurable activation (tanh, sin, relu, gelu, etc.)
+            - Optional residual connections via norms
+            ↓
+        Output: u(x) ∈ R^m (PDE solution)
+
+    The network is trained by minimizing the PDE residual:
+        L = L_PDE + α · L_BC + β · L_IC
+
+    Derivatives are computed via autograd for physics constraints.
     """
-    Time-dependent PDE data handler.
-    
-    Example: Burgers equation, Navier-Stokes
-    """
-    
+
     def __init__(
         self,
-        geometry,
-        pde: Callable,
-        ic: Callable,
-        bc: Callable,
-        num_domain: int = 1000,
-        num_boundary: int = 100,
-        num_initial: int = 100,
-    ):
-        self.geometry = geometry
-        self.pde = pde
-        self.ic = ic
-        self.bc = bc
-        self.num_domain = num_domain
-        self.num_boundary = num_boundary
-        self.num_initial = num_initial
-    
-    def losses(self, targets, outputs, loss_fn, inputs, model):
-        """Compute PDE, BC, and IC losses."""
-        # PDE residual loss
-        pde_residual = self.pde(inputs, outputs, model.net)
-        pde_loss = loss_fn(pde_residual, torch.zeros_like(pde_residual))
-        
-        # Boundary condition loss
-        bc_residual = self.bc(inputs, outputs)
-        bc_loss = loss_fn(bc_residual, torch.zeros_like(bc_residual))
-        
-        # Initial condition loss
-        ic_residual = self.ic(inputs, outputs)
-        ic_loss = loss_fn(ic_residual, torch.zeros_like(ic_residual))
-        
-        return [pde_loss, bc_loss, ic_loss]
-    
-    def train_next_batch(self, batch_size=None):
-        """Sample training points."""
-        # Domain points
-        domain_points = self.geometry.sample_domain(self.num_domain)
-        # Boundary points
-        boundary_points = self.geometry.sample_boundary(self.num_boundary)
-        # Initial points
-        initial_points = self.geometry.sample_initial(self.num_initial)
-        
-        return torch.cat([domain_points, boundary_points, initial_points], dim=0)
-    
-    def test(self):
-        """Get test data."""
-        return self.geometry.sample_domain(self.num_domain)
-
-
-class PDENetData(Data):
-    """
-    Data handler for Neural Operator (FNO-style).
-    
-    Uses paired input-output data for supervised learning.
-    """
-    
-    def __init__(
-        self,
-        X_train: torch.Tensor,
-        y_train: torch.Tensor,
-        X_test: Optional[torch.Tensor] = None,
-        y_test: Optional[torch.Tensor] = None,
-    ):
-        self.X_train = X_train
-        self.y_train = y_train
-        self.X_test = X_test
-        self.y_test = y_test
-        self.num_train = len(X_train)
-    
-    def losses(self, targets, outputs, loss_fn, inputs, model):
-        """Compute supervised loss."""
-        return [loss_fn(outputs, targets)]
-    
-    def train_next_batch(self, batch_size=None):
-        """Get training batch."""
-        if batch_size is None:
-            return self.X_train, self.y_train
-        
-        indices = torch.randperm(self.num_train)[:batch_size]
-        return self.X_train[indices], self.y_train[indices]
-    
-    def test(self):
-        """Get test data."""
-        return self.X_test, self.y_test
-
-
-# ============================================================================
-# Network Interface (from DeepXDE)
-# ============================================================================
-
-class NN(nn.Module, ABC):
-    """
-    Abstract base class for DeepXDE-style Neural Networks.
-    """
-    
-    @abstractmethod
-    def forward(self, inputs):
-        """Forward pass."""
-        pass
-
-
-class FNN(NN):
-    """
-    Feed-forward Neural Network (standard MLP).
-    
-    Used for PINNs.
-    """
-    
-    def __init__(
-        self,
-        layer_sizes: list,
+        layer_sizes: List[int],
         activation: str = "tanh",
         kernel_initializer: str = "Glorot uniform",
+        use_fourier_features: bool = False,
+        fourier_feature_scale: float = 1.0,
+        num_fourier_features: int = 256,
+        use_residual: bool = False,
+        dropout_rate: float = 0.0,
     ):
+        """
+        Initialize DeepXDE-style model using framework components.
+
+        Args:
+            layer_sizes: List of layer dimensions, e.g., [2, 64, 64, 64, 1]
+                        for input_dim=2, hidden=[64,64,64], output_dim=1
+            activation: Activation function ("tanh", "sin", "relu", "gelu", "sigmoid")
+            kernel_initializer: Weight initialization ("Glorot uniform", "He normal", etc.)
+            use_fourier_features: Whether to use Fourier feature mapping
+            fourier_feature_scale: Scale of random Fourier frequencies
+            num_fourier_features: Number of Fourier features (output dim = 2×)
+            use_residual: Whether to use residual connections (via custom norms)
+            dropout_rate: Dropout rate for hidden layers
+        """
         super().__init__()
-        
-        self.layer_sizes = layer_sizes
-        
-        # Build network
-        layers = []
-        for i in range(len(layer_sizes) - 1):
-            layers.append(nn.Linear(layer_sizes[i], layer_sizes[i + 1]))
-            if i < len(layer_sizes) - 2:
-                if activation == "tanh":
-                    layers.append(nn.Tanh())
-                elif activation == "relu":
-                    layers.append(nn.ReLU())
-                elif activation == "gelu":
-                    layers.append(nn.GELU())
-        
-        self.net = nn.Sequential(*layers)
-    
-    def forward(self, inputs):
-        return self.net(inputs)
+
+        self.layer_sizes = layer_sizes.copy()
+        self.activation_name = activation
+        self.kernel_initializer = kernel_initializer
+        self.use_fourier_features = use_fourier_features
+        self.fourier_feature_scale = fourier_feature_scale
+        self.num_fourier_features = num_fourier_features
+        self.use_residual = use_residual
+
+        input_dim = layer_sizes[0]
+        output_dim = layer_sizes[-1]
+        hidden_dims = layer_sizes[1:-1]
+
+        # Build Fourier feature mapping using framework component (if enabled)
+        if use_fourier_features:
+            self.fourier_encoder = FourierFeatureEncoder(
+                input_dim=input_dim,
+                num_fourier_features=num_fourier_features,
+                scale=fourier_feature_scale,
+                learnable=False,
+                include_input=False,  # DeepXDE-style: only Fourier features
+            )
+            mlp_input_dim = num_fourier_features * 2
+        else:
+            self.fourier_encoder = None
+            mlp_input_dim = input_dim
+
+        # Get initializer from framework
+        weight_init = get_initializer(kernel_initializer)
+
+        # Use framework's MLP for the neural network backbone
+        self.mlp = MLP(
+            in_dim=mlp_input_dim,
+            out_dim=output_dim,
+            hidden_dims=hidden_dims,
+            activation=activation,
+            dropout=dropout_rate,
+            use_layer_norm=False,  # DeepXDE-style: no LayerNorm
+            weight_init=weight_init,
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Forward pass.
+
+        Args:
+            x: Input coordinates [batch_size, input_dim]
+               Can be spatial (x), temporal (t), or spatiotemporal (x, t)
+
+        Returns:
+            Network output [batch_size, output_dim]
+        """
+        # Fourier feature mapping (for high-frequency PDEs)
+        if self.use_fourier_features and self.fourier_encoder is not None:
+            x = self.fourier_encoder(x)
+
+        return self.mlp(x)
+
+    def save_config(self):
+        """Save model configuration."""
+        return {
+            'model_type': 'deepxde',
+            'layer_sizes': self.layer_sizes,
+            'activation': self.activation_name,
+            'kernel_initializer': self.kernel_initializer,
+            'use_fourier_features': self.use_fourier_features,
+            'fourier_feature_scale': self.fourier_feature_scale,
+            'num_fourier_features': self.num_fourier_features,
+            'use_residual': self.use_residual,
+        }
 
 
-class FNO(NN):
+# Backward-compatible alias expected by tests/examples.
+PINNModel = DeepXDEModel
+
+
+# ============================================================================
+# Physics-Informed Loss (PINN-specific, not part of core framework)
+# ============================================================================
+
+class PhysicsLoss:
     """
-    Fourier Neural Operator.
-    
-    Used for learning operators between function spaces.
+    Physics-informed loss function for PDE training.
+
+    Combines PDE residual, boundary condition, and initial condition losses.
+    This is specific to PINN applications.
+
+    For supervised learning, use framework's Model with standard loss functions.
     """
-    
+
     def __init__(
         self,
-        modes: int,
-        width: int,
-        in_channels: int = 1,
-        out_channels: int = 1,
-        n_layers: int = 4,
+        pde_fn: Callable,
+        bc_fns: Optional[List[Callable]] = None,
+        ic_fn: Optional[Callable] = None,
+        lambda_bc: float = 1.0,
+        lambda_ic: float = 1.0,
     ):
-        super().__init__()
-        
-        # Use the FNO implementation from gnn_pde_v2
-        from gnn_pde_v2.models.fno_model import FNO as FNOBase
-        
-        self.net = FNOBase(
-            in_channels=in_channels,
-            out_channels=out_channels,
-            width=width,
-            modes=[modes] * 2,  # 2D
-            n_layers=n_layers,
-            n_dim=2,
-        )
-    
-    def forward(self, inputs):
-        return self.net(inputs)
+        """
+        Args:
+            pde_fn: Function that computes PDE residual: f(x, u, u_x, u_xx, ...)
+            bc_fns: List of boundary condition functions
+            ic_fn: Initial condition function
+            lambda_bc: Weight for BC loss
+            lambda_ic: Weight for IC loss
+        """
+        self.pde_fn = pde_fn
+        self.bc_fns = bc_fns or []
+        self.ic_fn = ic_fn
+        self.lambda_bc = lambda_bc
+        self.lambda_ic = lambda_ic
 
-
-# ============================================================================
-# Model Interface (Unified API from DeepXDE)
-# ============================================================================
-
-class Model:
-    """
-    DeepXDE-style unified Model API.
-    
-    The Model wraps Data and NN to provide a consistent training interface
-    regardless of the underlying method (PINN, DeepONet, FNO, etc.).
-    
-    Args:
-        data: Data instance (handles sampling and losses)
-        net: NN instance (the neural network architecture)
-    """
-    
-    def __init__(self, data: Data, net: NN):
-        self.data = data
-        self.net = net
-        
-        # Training state
-        self.opt_name = None
-        self.batch_size = None
-        self.loss_weights = None
-        self.metrics = None
-        self.optimizer = None
-        
-        # History
-        self.train_state = TrainState()
-        self.losshistory = LossHistory()
-    
-    def compile(
+    def __call__(
         self,
-        optimizer: str = "adam",
-        lr: float = 1e-3,
-        loss: Union[str, Callable] = "MSE",
-        metrics: Optional[list] = None,
-        loss_weights: Optional[list] = None,
-    ):
+        model: nn.Module,
+        x_pde: torch.Tensor,
+        x_bc: Optional[torch.Tensor] = None,
+        x_ic: Optional[torch.Tensor] = None,
+    ) -> Dict[str, torch.Tensor]:
         """
-        Configure the model for training.
-        
-        Args:
-            optimizer: Optimizer name ('adam', 'sgd', 'lbfgs')
-            lr: Learning rate
-            loss: Loss function ('MSE', 'L2', etc.)
-            metrics: List of metrics to track
-            loss_weights: Weights for each loss component
-        """
-        self.opt_name = optimizer
-        self.loss_weights = loss_weights
-        
-        # Setup optimizer
-        if optimizer == "adam":
-            self.optimizer = torch.optim.Adam(self.net.parameters(), lr=lr)
-        elif optimizer == "sgd":
-            self.optimizer = torch.optim.SGD(self.net.parameters(), lr=lr)
-        elif optimizer == "lbfgs":
-            self.optimizer = torch.optim.LBFGS(
-                self.net.parameters(),
-                lr=lr,
-                max_iter=100,
-            )
-        
-        # Setup loss function
-        if loss == "MSE":
-            self.loss_fn = nn.MSELoss()
-        elif loss == "L2":
-            self.loss_fn = lambda y_pred, y_true: torch.mean((y_pred - y_true) ** 2)
-        else:
-            self.loss_fn = loss
-        
-        self.metrics = metrics or []
-    
-    def train(
-        self,
-        epochs: Optional[int] = None,
-        iterations: Optional[int] = None,
-        batch_size: Optional[int] = None,
-        display_every: int = 100,
-    ):
-        """
-        Train the model.
-        
-        Args:
-            epochs: Number of epochs
-            iterations: Number of iterations (overrides epochs)
-            batch_size: Batch size
-            display_every: Display progress every N steps
-        """
-        if iterations is None:
-            iterations = epochs * 100  # Default
-        
-        print("Training model...\n")
-        print(f"{'Step':>8} {'Loss':>12} {'Test Loss':>12}")
-        print("-" * 40)
-        
-        for step in range(iterations):
-            # Training step
-            loss = self._train_step(batch_size)
-            
-            # Update history
-            self.losshistory.add_loss(loss)
-            
-            # Display progress
-            if step % display_every == 0 or step == iterations - 1:
-                test_loss = self._test()
-                print(f"{step:8d} {loss:12.4e} {test_loss:12.4e}")
-        
-        print("\nTraining finished!")
-    
-    def _train_step(self, batch_size):
-        """Single training step."""
-        self.net.train()
-        
-        # Get batch
-        batch = self.data.train_next_batch(batch_size)
-        
-        if isinstance(batch, tuple):
-            inputs, targets = batch
-        else:
-            inputs = batch
-            targets = None
-        
-        # Zero gradients
-        self.optimizer.zero_grad()
-        
-        # Forward
-        outputs = self.net(inputs)
-        
-        # Compute losses
-        losses = self.data.losses(targets, outputs, self.loss_fn, inputs, self)
-        
-        # Weight and sum losses
-        if self.loss_weights is not None:
-            loss = sum(w * l for w, l in zip(self.loss_weights, losses))
-        else:
-            loss = sum(losses)
-        
-        # Backward
-        loss.backward()
-        self.optimizer.step()
-        
-        return loss.item()
-    
-    def _test(self):
-        """Evaluate on test data."""
-        self.net.eval()
-        
-        with torch.no_grad():
-            batch = self.data.test()
-            
-            if isinstance(batch, tuple):
-                inputs, targets = batch
-            else:
-                inputs = batch
-                targets = None
-            
-            outputs = self.net(inputs)
-            
-            if targets is not None:
-                return self.loss_fn(outputs, targets).item()
-            else:
-                return 0.0
-    
-    def predict(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Predict on new data.
-        
-        Args:
-            x: Input tensor
-            
+        Compute total physics-informed loss.
+
         Returns:
-            Predictions
+            Dictionary with 'total', 'pde', 'bc', 'ic' losses
         """
-        self.net.eval()
-        with torch.no_grad():
-            return self.net(x)
-    
-    def save(self, filepath: str):
-        """Save model."""
-        torch.save({
-            'net_state_dict': self.net.state_dict(),
-            'optimizer_state_dict': self.optimizer.state_dict() if self.optimizer else None,
-        }, filepath)
-    
-    def restore(self, filepath: str):
-        """Restore model."""
-        checkpoint = torch.load(filepath)
-        self.net.load_state_dict(checkpoint['net_state_dict'])
-        if self.optimizer and checkpoint['optimizer_state_dict']:
-            self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        x_pde = x_pde.requires_grad_(True)
+        u = model(x_pde)
 
+        # Compute first derivatives
+        grads = torch.autograd.grad(
+            u.sum(), x_pde,
+            create_graph=True,
+            retain_graph=True,
+        )[0]
 
-class TrainState:
-    """Track training state."""
-    
-    def __init__(self):
-        self.step = 0
-        self.epoch = 0
+        # Package for PDE function
+        derivs = {'u': u, 'x': x_pde}
+        for i in range(x_pde.shape[1]):
+            derivs[f'u_x{i}'] = grads[:, i:i+1]
 
+        # PDE loss
+        pde_residual = self.pde_fn(**derivs)
+        loss_pde = torch.mean(pde_residual ** 2)
 
-class LossHistory:
-    """Track loss history."""
-    
-    def __init__(self):
-        self.loss_train = []
-        self.loss_test = []
-    
-    def add_loss(self, loss):
-        self.loss_train.append(loss)
+        losses = {'pde': loss_pde, 'total': loss_pde}
+
+        # BC loss
+        if x_bc is not None and self.bc_fns:
+            loss_bc = 0
+            u_bc = model(x_bc)
+            for bc_fn in self.bc_fns:
+                loss_bc += torch.mean(bc_fn(x_bc, u_bc) ** 2)
+            loss_bc /= len(self.bc_fns)
+            losses['bc'] = loss_bc
+            losses['total'] += self.lambda_bc * loss_bc
+
+        # IC loss
+        if x_ic is not None and self.ic_fn is not None:
+            u_ic = model(x_ic)
+            loss_ic = torch.mean(self.ic_fn(x_ic, u_ic) ** 2)
+            losses['ic'] = loss_ic
+            losses['total'] += self.lambda_ic * loss_ic
+
+        return losses
 
 
 # ============================================================================
-# Geometry Helpers
+# Integration with Unified Model API
 # ============================================================================
 
-class Geometry:
-    """Base geometry class."""
-    
-    def sample_domain(self, n):
-        """Sample points in the domain."""
-        raise NotImplementedError
-    
-    def sample_boundary(self, n):
-        """Sample points on the boundary."""
-        raise NotImplementedError
-    
-    def sample_initial(self, n):
-        """Sample points at initial time."""
-        raise NotImplementedError
+def create_deepxde_model(
+    layer_sizes: List[int],
+    activation: str = "tanh",
+    learning_rate: float = 1e-3,
+    use_fourier_features: bool = False,
+    **kwargs
+) -> Model:
+    """
+    Create a DeepXDE-style model wrapped in the framework's Unified Model API.
+
+    This provides a DeepXDE-like interface using gnn_pde_v2 framework components.
+
+    Args:
+        layer_sizes: List of layer dimensions
+        activation: Activation function
+        learning_rate: Learning rate for optimizer
+        use_fourier_features: Whether to use Fourier feature mapping
+        **kwargs: Additional arguments for DeepXDEModel
+
+    Returns:
+        Unified Model instance ready for training
+    """
+    # Create architecture
+    architecture = DeepXDEModel(
+        layer_sizes=layer_sizes,
+        activation=activation,
+        use_fourier_features=use_fourier_features,
+        **kwargs
+    )
+
+    # Create optimizer
+    optimizer = torch.optim.Adam(architecture.parameters(), lr=learning_rate)
+
+    # Wrap in Unified Model (from framework)
+    return Model(
+        architecture=architecture,
+        loss_fn='mse',
+        optimizer=optimizer,
+    )
 
 
-class Interval(Geometry):
-    """1D interval [xmin, xmax]."""
-    
-    def __init__(self, xmin, xmax):
-        self.xmin = xmin
-        self.xmax = xmax
-    
-    def sample_domain(self, n):
-        return torch.rand(n, 1) * (self.xmax - self.xmin) + self.xmin
-    
-    def sample_boundary(self, n):
-        # Two boundary points
-        n_per_side = n // 2
-        left = torch.full((n_per_side, 1), self.xmin)
-        right = torch.full((n - n_per_side, 1), self.xmax)
-        return torch.cat([left, right], dim=0)
-    
-    def sample_initial(self, n):
-        return torch.zeros(n, 1)
+# ============================================================================
+# Example: Poisson Equation
+# ============================================================================
+
+def poisson_pde(**kwargs):
+    """
+    Poisson equation: ∇²u = f
+
+    In 2D: u_xx + u_yy = f(x, y)
+
+    Here we solve: ∇²u = sin(πx)sin(πy) with u=0 on boundary
+    """
+    u = kwargs['u']
+    x = kwargs['x']
+
+    # Compute first derivatives
+    u_x = torch.autograd.grad(u.sum(), x, create_graph=True, retain_graph=True)[0]
+
+    # Compute second derivatives
+    u_xx = torch.autograd.grad(u_x[:, 0].sum(), x, create_graph=True, retain_graph=True)[0][:, 0]
+    u_yy = torch.autograd.grad(u_x[:, 1].sum(), x, create_graph=True, retain_graph=True)[0][:, 1]
+
+    # Source term
+    f = torch.sin(math.pi * x[:, 0]) * torch.sin(math.pi * x[:, 1])
+
+    # PDE residual: ∇²u - f = 0
+    residual = u_xx + u_yy - f
+    return residual
 
 
-class Rectangle(Geometry):
-    """2D rectangle [xmin, xmax] x [ymin, ymax]."""
-    
-    def __init__(self, xmin, xmax, ymin, ymax):
-        self.xmin, self.xmax = xmin, xmax
-        self.ymin, self.ymax = ymin, ymax
-    
-    def sample_domain(self, n):
-        x = torch.rand(n, 1) * (self.xmax - self.xmin) + self.xmin
-        y = torch.rand(n, 1) * (self.ymax - self.ymin) + self.ymin
-        return torch.cat([x, y], dim=1)
-    
-    def sample_boundary(self, n):
-        # Sample on 4 sides
-        n_per_side = n // 4
-        
-        # Bottom
-        x = torch.rand(n_per_side, 1) * (self.xmax - self.xmin) + self.xmin
-        y = torch.full((n_per_side, 1), self.ymin)
-        bottom = torch.cat([x, y], dim=1)
-        
-        # Top
-        x = torch.rand(n_per_side, 1) * (self.xmax - self.xmin) + self.xmin
-        y = torch.full((n_per_side, 1), self.ymax)
-        top = torch.cat([x, y], dim=1)
-        
-        # Left
-        x = torch.full((n_per_side, 1), self.xmin)
-        y = torch.rand(n_per_side, 1) * (self.ymax - self.ymin) + self.ymin
-        left = torch.cat([x, y], dim=1)
-        
-        # Right
-        x = torch.full((n - 3 * n_per_side, 1), self.xmax)
-        y = torch.rand((n - 3 * n_per_side, 1)) * (self.ymax - self.ymin) + self.ymin
-        right = torch.cat([x, y], dim=1)
-        
-        return torch.cat([bottom, top, left, right], dim=0)
-    
-    def sample_initial(self, n):
-        x = torch.rand(n, 1) * (self.xmax - self.xmin) + self.xmin
-        y = torch.rand(n, 1) * (self.ymax - self.ymin) + self.ymin
-        return torch.cat([x, y], dim=1)
+def example_poisson():
+    """
+    Example: Solving 2D Poisson equation with PINN using framework components.
+    """
+    print("=" * 60)
+    print("DeepXDE-style Poisson Equation Example")
+    print("=" * 60)
+
+    # Network: 2 inputs (x, y) → hidden → 1 output (u)
+    # Uses framework's DeepXDEModel with core.MLP backbone
+    model = DeepXDEModel(
+        layer_sizes=[2, 64, 64, 64, 1],
+        activation="tanh",
+        kernel_initializer="Glorot uniform",
+        use_fourier_features=False,
+    )
+
+    # Physics loss
+    physics_loss = PhysicsLoss(
+        pde_fn=poisson_pde,
+        lambda_bc=10.0,  # Strong BC enforcement
+    )
+
+    # Collocation points
+    num_points = 1000
+    x_pde = torch.rand(num_points, 2) * 2 - 1  # [-1, 1] × [-1, 1]
+
+    # Boundary points (u=0)
+    num_bc = 200
+    theta = torch.linspace(0, 2*math.pi, num_bc)
+    x_bc = torch.stack([torch.cos(theta), torch.sin(theta)], dim=1)
+
+    # Forward pass
+    u = model(x_pde)
+
+    print(f"\nModel Configuration:")
+    print(f"  Architecture: {model.layer_sizes}")
+    print(f"  Activation: {model.activation_name}")
+    print(f"  Uses framework's core.MLP backbone")
+    print(f"  Total parameters: {sum(p.numel() for p in model.parameters()):,}")
+
+    print(f"\nInput/Output:")
+    print(f"  Input shape: {x_pde.shape}")
+    print(f"  Output shape: {u.shape}")
+
+    # Compute physics loss (example)
+    losses = physics_loss(model, x_pde, x_bc)
+    print(f"\nPhysics Losses:")
+    print(f"  PDE: {losses['pde']:.6f}")
+    print(f"  BC: {losses.get('bc', 0):.6f}")
+    print(f"  Total: {losses['total']:.6f}")
+
+    return model, losses
 
 
 # ============================================================================
 # Usage Example
 # ============================================================================
 
-def example_pinn():
-    """Example: PINN for 1D Poisson equation."""
-    
-    # Define PDE: u_xx = f(x)
-    def pde(inputs, outputs, net):
-        x = inputs.requires_grad_(True)
-        u = net(x)
-        u_x = torch.autograd.grad(u, x, grad_outputs=torch.ones_like(u), create_graph=True)[0]
-        u_xx = torch.autograd.grad(u_x, x, grad_outputs=torch.ones_like(u_x), create_graph=True)[0]
-        f = torch.sin(2 * torch.pi * x)  # Source term
-        return u_xx - f
-    
-    def bc(inputs, outputs):
-        # Boundary condition: u(0) = u(1) = 0
-        return outputs
-    
-    def ic(inputs, outputs):
-        # No initial condition for steady state
-        return torch.zeros_like(outputs)
-    
-    # Create geometry
-    geom = Interval(0, 1)
-    
-    # Create data handler
-    data = TimePDE(
-        geometry=geom,
-        pde=pde,
-        ic=ic,
-        bc=bc,
-        num_domain=100,
-        num_boundary=20,
-        num_initial=0,
-    )
-    
-    # Create network
-    net = FNN(
-        layer_sizes=[1, 50, 50, 50, 1],
+def example_usage():
+    """
+    Demonstrate DeepXDE-style models using gnn_pde_v2 framework.
+    """
+    print("=" * 60)
+    print("DeepXDE Examples using gnn_pde_v2 Framework")
+    print("=" * 60)
+
+    print("\n" + "-" * 60)
+    print("Example 1: Standard FNN for low-frequency PDE")
+    print("  Uses framework's core.MLP")
+    print("-" * 60)
+
+    model1 = DeepXDEModel(
+        layer_sizes=[2, 64, 64, 64, 1],
         activation="tanh",
+        kernel_initializer="Glorot uniform",
     )
-    
-    # Create model
-    model = Model(data, net)
-    model.compile(optimizer="adam", lr=1e-3, loss="MSE")
-    
-    # Train
-    model.train(iterations=1000, display_every=200)
-    
-    # Predict
-    x_test = torch.linspace(0, 1, 100).unsqueeze(1)
-    u_pred = model.predict(x_test)
-    
-    print(f"\nPredicted solution shape: {u_pred.shape}")
-    
-    return model
 
+    x = torch.randn(100, 2)
+    y = model1(x)
+    print(f"Input: {x.shape}, Output: {y.shape}")
+    print(f"Parameters: {sum(p.numel() for p in model1.parameters()):,}")
 
-def example_fno():
-    """Example: FNO for Darcy flow."""
-    
-    # Create synthetic training data
-    n_train = 100
-    resolution = 32
-    
-    # Random permeability fields
-    X_train = torch.randn(n_train, 1, resolution, resolution)
-    # Corresponding pressure fields (synthetic)
-    y_train = torch.randn(n_train, 1, resolution, resolution)
-    
-    # Create data handler
-    data = PDENetData(X_train, y_train)
-    
-    # Create FNO network
-    net = FNO(
-        modes=16,
-        width=64,
-        in_channels=1,
-        out_channels=1,
-        n_layers=4,
+    print("\n" + "-" * 60)
+    print("Example 2: Fourier Feature Network for high-frequency PDE")
+    print("  Uses framework's FourierFeatureEncoder + core.MLP")
+    print("-" * 60)
+
+    model2 = DeepXDEModel(
+        layer_sizes=[2, 128, 128, 128, 1],
+        activation="tanh",
+        use_fourier_features=True,
+        num_fourier_features=256,
+        fourier_feature_scale=10.0,
     )
-    
-    # Create model
-    model = Model(data, net)
-    model.compile(optimizer="adam", lr=1e-3, loss="MSE")
-    
-    # Train
-    model.train(iterations=500, batch_size=10, display_every=100)
-    
-    # Predict
-    X_test = torch.randn(1, 1, resolution, resolution)
-    y_pred = model.predict(X_test)
-    
-    print(f"\nPredicted solution shape: {y_pred.shape}")
-    
-    return model
+
+    y2 = model2(x)
+    print(f"Input: {x.shape}, Output: {y2.shape}")
+    print(f"Parameters: {sum(p.numel() for p in model2.parameters()):,}")
+    print(f"Fourier feature output dim: {model2.fourier_encoder.get_output_dim()}")
+
+    print("\n" + "-" * 60)
+    print("Example 3: SIREN-style Network (sin activation)")
+    print("  Uses framework's MLP with 'sin' activation")
+    print("-" * 60)
+
+    model3 = DeepXDEModel(
+        layer_sizes=[3, 128, 128, 128, 2],
+        activation="sin",
+        kernel_initializer="He uniform",
+    )
+
+    x3 = torch.randn(50, 3)
+    y3 = model3(x3)
+    print(f"Input: {x3.shape}, Output: {y3.shape}")
+    print(f"Parameters: {sum(p.numel() for p in model3.parameters()):,}")
+
+    print("\n" + "-" * 60)
+    print("Example 4: Unified Model API")
+    print("  Uses framework's convenient.Model wrapper")
+    print("-" * 60)
+
+    # Using the Unified Model wrapper
+    unified_model = create_deepxde_model(
+        layer_sizes=[2, 64, 64, 1],
+        activation="tanh",
+        learning_rate=1e-3,
+    )
+
+    print(f"Unified Model created with framework Model class")
+    print(f"Ready for training with model.train_step(batch)")
+
+    print("\n" + "=" * 60)
+    print("Model registered as:", model1._model_name)
+    print("Available models:", AutoRegisterModel.list_models())
+    print("=" * 60)
+
+    print("\n" + "=" * 60)
+    print("Example 5: Poisson Equation")
+    print("=" * 60)
+    model4, losses = example_poisson()
+
+    return model1, model2, model3, unified_model, model4
 
 
 if __name__ == "__main__":
-    print("=" * 50)
-    print("Example 1: PINN for 1D Poisson equation")
-    print("=" * 50)
-    model_pinn = example_pinn()
-    
-    print("\n" + "=" * 50)
-    print("Example 2: FNO for Darcy flow")
-    print("=" * 50)
-    model_fno = example_fno()
+    model1, model2, model3, unified_model, model4 = example_usage()

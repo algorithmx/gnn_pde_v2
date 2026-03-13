@@ -39,11 +39,15 @@ class MLP(nn.Module):
         norms: Per-layer normalization specs (overrides norm/final_norm if provided)
         linear_factory: Callable creating the affine layer for each stage
         use_layer_norm: Backward-compatible alias for hidden LayerNorm behavior
+        pre_activation: If set, uses pre-activation pattern (Act → Linear) instead of
+            post-activation (Linear → Act). Value can be an activation spec (str, module,
+            or callable) which is applied before each linear layer. This is useful for
+            architectures like AdaLN modulation networks.
         weight_init: Weight initialization function (default: xavier_uniform_)
         bias_init: Bias initialization function (default: constant 0)
 
     Example:
-        >>> # Standard usage
+        >>> # Standard usage (post-activation: Linear → Act)
         >>> mlp = MLP(64, 64, hidden_dims=[128, 128], use_layer_norm=False)
         >>>
         >>> # With custom initialization
@@ -58,6 +62,10 @@ class MLP(nn.Module):
         >>> # Per-layer normalization (MeshGraphNets-style with norms)
         >>> mlp = MLP(64, 64, hidden_dims=[128, 128, 128], activation='relu',
         ...           norms=[None, None, None, 'layer'])  # 4 layers, norm only on final
+        >>>
+        >>> # Pre-activation pattern (Act → Linear) for AdaLN-style modulation
+        >>> mlp = MLP(64, 192, hidden_dims=[], pre_activation='silu')
+        >>> # Produces: SiLU → Linear(64, 192)
     """
 
     def __init__(
@@ -74,6 +82,7 @@ class MLP(nn.Module):
         norms: Optional[Sequence[Any]] = None,
         linear_factory: Optional[Callable[[int, int], nn.Module]] = None,
         use_layer_norm: Optional[bool] = True,
+        pre_activation: Any = None,
         weight_init: Callable = init.xavier_uniform_,
         bias_init: Callable = partial(init.constant_, val=0.0),
     ):
@@ -112,27 +121,35 @@ class MLP(nn.Module):
         hidden_activations = self._expand_spec(activation, hidden_layers, "activation")
         hidden_dropouts = self._expand_numeric_spec(dropout, hidden_layers, "dropout")
 
-        # Build layers
-        for i in range(total_layers):
-            layers.append(linear_factory(dims[i], dims[i + 1]))
+        # Pre-activation mode: Act → Linear per layer
+        if pre_activation is not None:
+            pre_act_module = self._make_activation(pre_activation)
+            for i in range(total_layers):
+                if pre_act_module is not None:
+                    layers.append(pre_act_module)
+                layers.append(linear_factory(dims[i], dims[i + 1]))
+        else:
+            # Standard post-activation mode: Linear → Act
+            for i in range(total_layers):
+                layers.append(linear_factory(dims[i], dims[i + 1]))
 
-            is_last = i == total_layers - 1
-            norm_module = self._make_norm(layer_norms[i], dims[i + 1])
-            if norm_module is not None:
-                layers.append(norm_module)
+                is_last = i == total_layers - 1
+                norm_module = self._make_norm(layer_norms[i], dims[i + 1])
+                if norm_module is not None:
+                    layers.append(norm_module)
 
-            if not is_last:
-                act_module = self._make_activation(hidden_activations[i])
-                if act_module is not None:
-                    layers.append(act_module)
-                if hidden_dropouts[i] > 0:
-                    layers.append(nn.Dropout(hidden_dropouts[i]))
-            else:
-                act_module = self._make_activation(final_activation)
-                if act_module is not None:
-                    layers.append(act_module)
-                if final_dropout > 0:
-                    layers.append(nn.Dropout(final_dropout))
+                if not is_last:
+                    act_module = self._make_activation(hidden_activations[i])
+                    if act_module is not None:
+                        layers.append(act_module)
+                    if hidden_dropouts[i] > 0:
+                        layers.append(nn.Dropout(hidden_dropouts[i]))
+                else:
+                    act_module = self._make_activation(final_activation)
+                    if act_module is not None:
+                        layers.append(act_module)
+                    if final_dropout > 0:
+                        layers.append(nn.Dropout(final_dropout))
 
         self.net = nn.Sequential(*layers)
         self.weight_init = weight_init

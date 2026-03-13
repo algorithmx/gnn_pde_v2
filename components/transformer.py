@@ -175,14 +175,20 @@ class TransformerBlock(nn.Module):
             self.attn = MultiHeadAttention(dim, n_heads, dropout)
         
         self.norm2 = nn.LayerNorm(dim)
-        
+
         mlp_dim = int(dim * mlp_ratio)
-        self.mlp = nn.Sequential(
-            nn.Linear(dim, mlp_dim),
-            nn.GELU(),
-            nn.Dropout(dropout),
-            nn.Linear(mlp_dim, dim),
-            nn.Dropout(dropout),
+
+        # Use framework's MLP
+        from ..core.mlp import MLP
+
+        self.mlp = MLP(
+            in_dim=dim,
+            out_dim=dim,
+            hidden_dims=[mlp_dim],
+            activation='gelu',
+            dropout=dropout,
+            final_dropout=dropout,
+            use_layer_norm=False,
         )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:

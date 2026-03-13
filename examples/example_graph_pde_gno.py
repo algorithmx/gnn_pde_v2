@@ -241,10 +241,13 @@ class GraphConvBlock(nn.Module):
         else:
             raise ValueError(f"Unknown edge_weight_type: {edge_weight_type}")
 
-        self.edge_weight_net = nn.Sequential(
-            nn.Linear(edge_hidden_size, hidden_size),
-            nn.ReLU(),
-            nn.Linear(hidden_size, out_dim),
+        # Use framework's MLP for edge weight network
+        self.edge_weight_net = MLP(
+            in_dim=edge_hidden_size,
+            out_dim=out_dim,
+            hidden_dims=[hidden_size],
+            activation='relu',
+            use_layer_norm=False,
         )
 
         # Optional root transform and bias (as in NNConv)
