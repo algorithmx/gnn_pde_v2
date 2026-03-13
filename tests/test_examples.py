@@ -53,7 +53,8 @@ class TestPaperExamples:
         """Test DeepXDE example imports."""
         try:
             from gnn_pde_v2.examples import example_deepxde as example
-            assert hasattr(example, 'PINNModel')
+            assert hasattr(example, 'Model')
+            assert hasattr(example, 'DeepONet')
         except ImportError as e:
             pytest.fail(f"Failed to import DeepXDE example: {e}")
     
