@@ -32,7 +32,12 @@ from .layers import (
 from .processors import GraphNetBlock, GraphNetProcessor
 from .decoders import MLPDecoder, IndependentMLPDecoder
 from .probe import ProbeDecoder, ProbeMessagePassingLayer
-from .transformer import TransformerBlock, TransformerProcessor, MultiHeadAttention, PhysicsTokenAttention
+from .transformer import (
+    TransformerBlock, TransformerProcessor, MultiHeadAttention, PhysicsTokenAttention,
+    # Conditioning
+    Modulation, ConditioningProtocol,
+    ZeroConditioning, AdaLNConditioning, DualAdaLNConditioning, FiLMConditioning,
+)
 from .fno import FNOProcessor, SpectralConv, FNOBlock
 
 __all__ = [
@@ -64,4 +69,11 @@ __all__ = [
     "IndependentMLPDecoder",
     "ProbeDecoder",
     "ProbeMessagePassingLayer",
+    # Conditioning
+    "Modulation",
+    "ConditioningProtocol",
+    "ZeroConditioning",
+    "AdaLNConditioning",
+    "DualAdaLNConditioning",
+    "FiLMConditioning",
 ]
