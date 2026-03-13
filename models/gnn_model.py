@@ -81,7 +81,7 @@ class MeshGraphNet(AutoRegisterModel, name='meshgraphnet'):
         edge_in_dim: int,
         out_dim: int,
         latent_dim: int = 128,
-        n_message_passing: int = 15,
+        n_layers: int = 15,
         hidden_dim: int = 128,
         activation: str = 'silu',  # MeshGraphNets uses silu
     ):
@@ -102,7 +102,7 @@ class MeshGraphNet(AutoRegisterModel, name='meshgraphnet'):
             node_dim=latent_dim,
             edge_dim=latent_dim,
             global_dim=None,
-            n_layers=n_message_passing,
+            n_layers=n_layers,
             hidden_dim=hidden_dim,
             activation=activation,
             residual=True,

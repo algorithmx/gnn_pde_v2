@@ -61,7 +61,6 @@ class GNNConfig(ModelConfig):
     edge_in_dim: int = Field(default=3, ge=1, description="Input edge feature dimension")
     out_dim: int = Field(default=1, ge=1, description="Output dimension")
     latent_dim: int = Field(default=128, ge=16, description="Latent dimension")
-    n_message_passing: int = Field(default=4, ge=1, le=50, description="Number of message passing steps")
     residual: bool = Field(default=True, description="Use residual connections")
     
     # Transformer-specific

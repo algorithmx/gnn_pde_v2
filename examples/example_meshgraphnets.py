@@ -109,7 +109,7 @@ class MeshGraphNets(AutoRegisterModel, name='meshgraphnets', namespace='example'
         edge_input_size: int,
         output_size: int,
         hidden_size: int = 128,
-        message_passing_steps: int = 15,
+        n_layers: int = 15,
         activation: str = "silu",
     ):
         """
@@ -120,13 +120,13 @@ class MeshGraphNets(AutoRegisterModel, name='meshgraphnets', namespace='example'
             edge_input_size: Dimension of edge input features
             output_size: Dimension of output predictions
             hidden_size: Hidden dimension for all layers (default: 128)
-            message_passing_steps: Number of message passing steps (default: 15)
+            n_layers: Number of message passing layers (default: 15)
             activation: Activation function - "silu" or "relu" (default: "silu")
         """
         super().__init__()
         
         self.hidden_size = hidden_size
-        self.message_passing_steps = message_passing_steps
+        self.n_layers = n_layers
         
         # Encoder: faithful 4-linear MLP with terminal LayerNorm
         self.node_encoder = make_meshgraphnets_mlp(
@@ -145,7 +145,7 @@ class MeshGraphNets(AutoRegisterModel, name='meshgraphnets', namespace='example'
         # Processor: faithful GN blocks
         self.processor_blocks = nn.ModuleList([
             MeshGraphNetsGNBlock(hidden_size=hidden_size)
-            for _ in range(message_passing_steps)
+            for _ in range(n_layers)
         ])
 
         # Decoder: faithful 4-linear MLP WITHOUT terminal LayerNorm
@@ -201,7 +201,7 @@ class MeshGraphNets(AutoRegisterModel, name='meshgraphnets', namespace='example'
             'edge_input_size': self.edge_encoder.net[0].in_features,
             'output_size': self.decoder.net[-1].out_features if isinstance(self.decoder.net[-1], nn.Linear) else self.decoder.net[-2].out_features,
             'hidden_size': self.hidden_size,
-            'message_passing_steps': self.message_passing_steps,
+            'n_layers': self.n_layers,
         }
 
 
@@ -278,7 +278,7 @@ def example_usage():
         edge_input_size=3,       # e.g., relative displacement (3)
         output_size=3,           # e.g., velocity acceleration (3) for 3D
         hidden_size=128,
-        message_passing_steps=15,
+        n_layers=15,
         activation="silu",
     )
     
@@ -301,7 +301,7 @@ def example_usage():
     
     print(f"\nModel Configuration:")
     print(f"  Hidden size: {model.hidden_size}")
-    print(f"  Message passing steps: {model.message_passing_steps}")
+    print(f"  Layers: {model.n_layers}")
     print(f"  Total parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     print(f"\nInput/Output Shapes:")
