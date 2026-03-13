@@ -5,17 +5,48 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.3.4] - 2026-03-13
+
+### Added
+
+- **Generic conditioning protocol for transformer components**:
+  - `Modulation` dataclass: encapsulates shift, scale, gate, and cross_kv parameters for flexible attention modulation
+  - `ConditioningProtocol` ABC: pluggable interface for implementing custom conditioning schemes
+  - `ZeroConditioning`: identity passthrough (no modulation applied)
+  - `AdaLNConditioning`: single-source Adaptive Layer Normalization conditioning
+  - `DualAdaLNConditioning`: UniSolver-style dual conditioning with μ (mean) and f (forcing) embeddings
+  - `FiLMConditioning`: Feature-wise Linear Modulation (γ, β) for feature space transformation
+  - `_apply_modulation` helper: unified tensor modulation application
+- **Exported conditioning components** from `gnn_pde_v2.components`:
+  - `Modulation`, `ConditioningProtocol`, `ZeroConditioning`, `AdaLNConditioning`, `DualAdaLNConditioning`, `FiLMConditioning`
+
+### Changed
+
+- **Transformer blocks now support pluggable conditioning**: enables research on various modulation strategies (AdaLN, FiLM, dual-source)
+
 ## [2.3.3] - 2026-03-13
 
 ### Changed
 
-Move `layers/residual.py` to `components/layers.py` despite YAGNI.
+- **Consolidated residual connections** into `components/layers.py`:
+  - Moved all residual connection implementations from `layers/residual.py` to `components/layers.py`
+  - Removed the now-redundant `layers/residual.py` file
+  - Provides comprehensive collection: `Residual`, `PreNormResidual`, `PostNormResidual`, `GRUGated`, `Highway`, `StochasticDepth`, etc.
+- **Extended `components/layers.py`** with enhanced residual connection support and improved documentation
+
+### Removed
+
+- `layers/residual.py` (consolidated into `components/layers.py`)
 
 ## [2.3.2] - 2026-03-13
 
 ### Changed
 
-`AutoRegisterModel` now inherits from `BaseModel`. 
+- **`AutoRegisterModel` now inherits from `BaseModel`**:
+  - Unifies the model hierarchy: all registered models now share common `BaseModel` interface
+  - Improves type consistency across the codebase
+  - Enhanced `convenient/registry.py` with better inheritance structure
+- **Updated all example models** to use the unified `AutoRegisterModel` pattern consistently 
 
 ## [2.3.1] - 2026-03-13
 
