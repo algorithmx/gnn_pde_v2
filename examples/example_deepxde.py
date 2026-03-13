@@ -25,7 +25,7 @@ from abc import ABC, abstractmethod
 # Framework imports
 from gnn_pde_v2.core import MLP
 from gnn_pde_v2.convenient import AutoRegisterModel, get_initializer
-from gnn_pde_v2.convenient.training import Model as FrameworkModel, LossFunction
+from training_utils import Model
 
 
 # ============================================================================

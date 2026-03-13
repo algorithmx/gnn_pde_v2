@@ -32,7 +32,8 @@ import math
 # Import framework components
 from gnn_pde_v2.core import MLP
 from gnn_pde_v2.components import FourierFeatureEncoder
-from gnn_pde_v2.convenient import AutoRegisterModel, get_initializer, Model
+from gnn_pde_v2.convenient import AutoRegisterModel, get_initializer
+from gnn_pde_v2.examples.training_utils import Model
 
 
 class DeepXDEModel(AutoRegisterModel, name='deepxde', namespace='example'):

@@ -4,8 +4,11 @@ Convenient high-level API for GNN-PDE v2 (optional).
 This module provides optional sugar for quick experimentation:
 - Auto-registration for models
 - Pydantic-based configuration
-- Unified training wrapper
 - String-based initialization
+
+NOTE: Training utilities (Model, LossFunction) have been moved to examples/training_utils.py
+to keep the framework lean. For training wrappers, use:
+    from gnn_pde_v2.examples.training_utils import Model, LossFunction
 
 For lean usage, import directly from core and components:
     from gnn_pde_v2 import GraphsTuple, BaseModel
@@ -40,10 +43,7 @@ try:
 except ImportError:
     ConfigBuilder = None
 
-try:
-    from .training import Model, LossFunction
-except ImportError:
-    Model = LossFunction = None
+# Training utilities removed - use examples/training_utils.py instead
 
 try:
     from .initializers import get_initializer, initialize_module
@@ -66,9 +66,7 @@ __all__ = [
     'ExperimentConfig',
     # Builder
     'ConfigBuilder',
-    # Training
-    'Model',
-    'LossFunction',
+    # Training removed - use examples/training_utils.py instead
     # Initializers
     'get_initializer',
     'initialize_module',
