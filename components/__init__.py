@@ -20,7 +20,15 @@ Example:
 
 from .encoders import MLPEncoder, MLPMeshEncoder, make_mlp_encoder
 from .fourier_encoder import FourierFeatureEncoder
-from .layers import Residual
+from .layers import (
+    Residual,
+    ResidualBlock,
+    GatedResidual,
+    PreNormResidual,
+    ResidualSequence,
+    SkipConnection,
+    make_residual,
+)
 from .processors import GraphNetBlock, GraphNetProcessor
 from .decoders import MLPDecoder, IndependentMLPDecoder
 from .probe import ProbeDecoder, ProbeMessagePassingLayer
@@ -33,8 +41,14 @@ __all__ = [
     "MLPMeshEncoder",
     "make_mlp_encoder",
     "FourierFeatureEncoder",
-    # Layers
+    # Layers (residual connections)
     "Residual",
+    "ResidualBlock",
+    "GatedResidual",
+    "PreNormResidual",
+    "ResidualSequence",
+    "SkipConnection",
+    "make_residual",
     # Processors
     "GraphNetBlock",
     "GraphNetProcessor",

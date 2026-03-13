@@ -10,8 +10,11 @@ import torch.nn as nn
 from dataclasses import replace
 
 from gnn_pde_v2 import GraphsTuple
+from gnn_pde_v2.core import MLP
 from gnn_pde_v2.components import (
-    MLP, make_mlp_encoder, Residual,
+    make_mlp_encoder,
+    Residual, ResidualBlock, GatedResidual, PreNormResidual,
+    ResidualSequence, SkipConnection, make_residual,
     GraphNetBlock, GraphNetProcessor,
     MLPDecoder, IndependentMLPDecoder,
     ProbeDecoder,
@@ -120,30 +123,256 @@ class TestMLP:
 
 
 class TestResidual:
-    """Test Residual wrapper."""
-    
+    """Test Residual wrapper (backward-compatible simple interface)."""
+
     def test_simple_residual(self, device):
         """Test simple residual connection."""
         module = nn.Linear(10, 10).to(device)
         residual = Residual(module).to(device)
-        
+
         x = torch.randn(3, 10, device=device)
         out = residual(x)
-        
+
         expected = x + module(x)
         assert torch.allclose(out, expected)
-    
+
     def test_residual_with_norm(self, device):
         """Test residual with normalization."""
         module = nn.Linear(10, 10).to(device)
         norm = nn.LayerNorm(10).to(device)
         residual = Residual(module, norm=norm).to(device)
-        
+
         x = torch.randn(3, 10, device=device)
         out = residual(x)
-        
+
         expected = x + module(norm(x))
         assert torch.allclose(out, expected)
+
+
+class TestResidualBlock:
+    """Test ResidualBlock with different residual types."""
+
+    def test_add_residual(self, device):
+        """Test simple add residual."""
+        module = nn.Linear(10, 10).to(device)
+        block = ResidualBlock(module, residual_type='add').to(device)
+
+        x = torch.randn(3, 10, device=device)
+        out = block(x)
+
+        expected = x + module(x)
+        assert torch.allclose(out, expected)
+
+    def test_scaled_residual(self, device):
+        """Test scaled residual with fixed scale."""
+        module = nn.Linear(10, 10).to(device)
+        block = ResidualBlock(module, residual_type='scaled', scale=0.5).to(device)
+
+        x = torch.randn(3, 10, device=device)
+        out = block(x)
+
+        expected = x + 0.5 * module(x)
+        assert torch.allclose(out, expected)
+
+    def test_scaled_residual_learnable(self, device):
+        """Test scaled residual with learnable scale."""
+        module = nn.Linear(10, 10).to(device)
+        block = ResidualBlock(module, residual_type='scaled', learnable_scale=True).to(device)
+
+        x = torch.randn(3, 10, device=device)
+        out = block(x)
+
+        # Should start with scale=1.0
+        assert block.scale.item() == 1.0
+        assert out.shape == x.shape
+
+    def test_none_residual(self, device):
+        """Test no residual (pass-through)."""
+        module = nn.Linear(10, 10).to(device)
+        block = ResidualBlock(module, residual_type='none').to(device)
+
+        x = torch.randn(3, 10, device=device)
+        out = block(x)
+
+        expected = module(x)
+        assert torch.allclose(out, expected)
+
+    def test_shape_mismatch_raises(self, device):
+        """Test that shape mismatch raises error."""
+        module = nn.Linear(10, 20).to(device)  # Different output dim
+        block = ResidualBlock(module, residual_type='add').to(device)
+
+        x = torch.randn(3, 10, device=device)
+        with pytest.raises(ValueError, match="shapes don't match"):
+            block(x)
+
+
+class TestGatedResidual:
+    """Test GatedResidual with learnable gate."""
+
+    def test_gated_residual(self, device):
+        """Test gated residual forward pass."""
+        module = nn.Sequential(nn.Linear(10, 10), nn.ReLU())
+        block = GatedResidual(module, gate_activation='sigmoid').to(device)
+
+        x = torch.randn(3, 10, device=device)
+        out = block(x)
+
+        assert out.shape == x.shape
+        # Output should be different from both input and module output
+        assert not torch.allclose(out, x)
+
+    def test_gate_bias_initialization(self, device):
+        """Test gate bias affects output."""
+        module = nn.Linear(10, 10)
+        # High bias = more weight on residual branch
+        block_high = GatedResidual(module, gate_bias=5.0).to(device)
+        # Low bias = less weight on residual branch
+        block_low = GatedResidual(module, gate_bias=-5.0).to(device)
+
+        x = torch.randn(3, 10, device=device)
+        out_high = block_high(x)
+        out_low = block_low(x)
+
+        # Outputs should differ due to different gate biases
+        assert not torch.allclose(out_high, out_low)
+
+
+class TestPreNormResidual:
+    """Test PreNormResidual (Transformer-style)."""
+
+    def test_prenorm_residual(self, device):
+        """Test pre-normalization residual."""
+        module = nn.Linear(10, 10).to(device)
+        block = PreNormResidual(module, dim=10).to(device)
+
+        x = torch.randn(3, 10, device=device)
+        out = block(x)
+
+        expected = x + module(block.norm(x))
+        assert torch.allclose(out, expected)
+
+    def test_prenorm_with_attention(self, device):
+        """Test with multi-head attention module (wrapped for self-attention)."""
+
+        class SelfAttention(nn.Module):
+            """Wrapper for self-attention that handles the query/key/value API."""
+            def __init__(self, dim, heads):
+                super().__init__()
+                self.attn = nn.MultiheadAttention(embed_dim=dim, num_heads=heads, batch_first=True)
+
+            def forward(self, x):
+                out, _ = self.attn(x, x, x)
+                return out
+
+        block = PreNormResidual(SelfAttention(64, 4), dim=64).to(device)
+
+        x = torch.randn(2, 10, 64, device=device)
+        out = block(x)
+
+        assert out.shape == x.shape
+
+
+class TestResidualSequence:
+    """Test ResidualSequence."""
+
+    def test_sequence_forward(self, device):
+        """Test forward through multiple residual blocks."""
+        blocks = [nn.Linear(10, 10) for _ in range(3)]
+        seq = ResidualSequence(blocks, residual_type='add').to(device)
+
+        x = torch.randn(3, 10, device=device)
+        out = seq(x)
+
+        assert out.shape == x.shape
+        assert len(seq) == 3
+
+    def test_sequence_indexing(self, device):
+        """Test indexing into sequence."""
+        blocks = [nn.Linear(10, 10) for _ in range(3)]
+        seq = ResidualSequence(blocks).to(device)
+
+        assert isinstance(seq[0], ResidualBlock)
+        assert seq[0].residual_type == 'add'
+
+
+class TestSkipConnection:
+    """Test SkipConnection with projection."""
+
+    def test_skip_with_projection(self, device):
+        """Test skip connection with dimension change."""
+        module = nn.Sequential(nn.Linear(64, 128), nn.ReLU())
+        proj = nn.Linear(64, 128)
+        block = SkipConnection(module, projection=proj, aggregation='add').to(device)
+
+        x = torch.randn(3, 64, device=device)
+        out = block(x)
+
+        assert out.shape == (3, 128)
+        expected = proj(x) + module(x)
+        assert torch.allclose(out, expected)
+
+    def test_skip_concat(self, device):
+        """Test skip connection with concatenation."""
+        module = nn.Linear(64, 64)
+        block = SkipConnection(module, aggregation='concat').to(device)
+
+        x = torch.randn(3, 64, device=device)
+        out = block(x)
+
+        assert out.shape == (3, 128)  # 64 + 64
+
+    def test_skip_none(self, device):
+        """Test skip connection with no aggregation."""
+        module = nn.Linear(64, 128)
+        block = SkipConnection(module, aggregation='none').to(device)
+
+        x = torch.randn(3, 64, device=device)
+        out = block(x)
+
+        assert out.shape == (3, 128)
+        assert torch.allclose(out, module(x))
+
+
+class TestMakeResidual:
+    """Test make_residual factory function."""
+
+    def test_make_add(self, device):
+        """Test factory creates ResidualBlock with add."""
+        module = nn.Linear(10, 10)
+        block = make_residual(module, 'add')
+
+        assert isinstance(block, ResidualBlock)
+        assert block.residual_type == 'add'
+
+    def test_make_scaled(self, device):
+        """Test factory creates ResidualBlock with scaled."""
+        module = nn.Linear(10, 10)
+        block = make_residual(module, 'scaled', scale=0.5)
+
+        assert isinstance(block, ResidualBlock)
+        assert block.residual_type == 'scaled'
+
+    def test_make_gated(self, device):
+        """Test factory creates GatedResidual."""
+        module = nn.Linear(10, 10)
+        block = make_residual(module, 'gated')
+
+        assert isinstance(block, GatedResidual)
+
+    def test_make_prenorm(self, device):
+        """Test factory creates PreNormResidual."""
+        module = nn.Linear(10, 10)
+        block = make_residual(module, 'prenorm', dim=10)
+
+        assert isinstance(block, PreNormResidual)
+
+    def test_make_none(self, device):
+        """Test factory returns module unchanged."""
+        module = nn.Linear(10, 10)
+        block = make_residual(module, 'none')
+
+        assert block is module  # Should return same object
 
 
 class TestGraphNetBlock:
