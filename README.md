@@ -11,6 +11,7 @@ A clean implementation of the Encode-Process-Decode architecture for PDE-GNNs wi
 - **Modular EPD Architecture**: Clean separation of Encoder, Processor, Decoder components
 - **Dual API Design**: Lean core API + optional convenient high-level API
 - **Component-Based**: Reusable building blocks (MLP, GraphNetBlock, FNOBlock, etc.)
+- **Pluggable Conditioning**: Protocol-based conditioning system (AdaLN, FiLM, DualAdaLN) for transformers
 - **Research Reproductions**: 7+ paper implementations with exact equivalence
 - **Optional Auto-Registration**: Convenience models can self-register for config-based instantiation
 - **Flexible Dependencies**: Graceful fallbacks when optional dependencies unavailable
@@ -142,28 +143,147 @@ model = builder.build_unified_model(TrainingConfig())
 metrics = model.train_step((graph, target))
 ```
 
+### Convenient API Components
+
+| Component | Description |
+|-----------|-------------|
+| **Registry** | |
+| `AutoRegisterModel` | Base class inheriting from `BaseModel` with auto-registration, `create()`, `list_models()`, `get_model_info()` |
+| **Configuration** | |
+| `ModelConfig` | Pydantic base model configuration |
+| `FNOConfig` | FNO-specific config (width, modes, n_dim, use_afno) |
+| `GNNConfig` | GNN-specific config (message_passing, physics_tokens) |
+| `TrainingConfig` | Training hyperparameters (optimizer, scheduler, loss) |
+| `ExperimentConfig` | Full experiment config combining model + training |
+| **Building & Training** | |
+| `ConfigBuilder` | Configuration-based model building |
+| `Model` | Unified training wrapper with `train_step()`, `predict()`, `evaluate()`, checkpointing |
+| `LossFunction` | Loss function wrapper with string-based selection |
+| **Utilities** | |
+| `get_initializer()` | String-based weight initialization lookup |
+| `initialize_module()` | Initialize all module parameters by name |
+| `scatter_softmax()` | Softmax aggregation for attention |
+| `scatter_min()` | Min aggregation |
+| `segment_*` | Alias API (segment_sum, segment_mean, segment_max, segment_min) |
+
 ## Available Components
 
 ### Core Building Blocks
 
 | Component | Description | Usage |
 |-----------|-------------|-------|
-| `MLP` | Flexible dense or pointwise-conv feedforward stack | Encoder/Decoder |
+| `MLP` | Flexible dense or pointwise-conv feedforward stack with pre-activation option | Encoder/Decoder |
+| `BaseModel` | Minimal marker class for model hierarchy (no magic, no registry) | Base class |
+| `SinActivation` | Sine activation for SIREN-style networks | Activation |
 | `FourierFeatureEncoder` | Random Fourier feature lifting | Encoder |
 | `GraphNetBlock` | Graph message passing block | Processor |
-| `TransformerBlock` | Multi-head attention block | Processor |
+| `TransformerBlock` | Multi-head attention block with optional conditioning | Processor |
 | `FNOBlock` | Fourier neural operator block | Processor |
 | `Residual` | Residual connection wrapper | Any layer |
 | `ProbeDecoder` | Arbitrary query point decoder | Decoder |
+
+### Functional Operations (core.functional)
+
+| Function | Description |
+|----------|-------------|
+| `scatter_sum` | Sum aggregation (scatter_add) |
+| `scatter_mean` | Mean aggregation |
+| `scatter_max` | Max aggregation |
+| `aggregate_edges` | Aggregate edge features to receiver nodes |
+| `broadcast_nodes_to_edges` | Broadcast node features to edges |
+
+### Encoders (components.encoders)
+
+| Component | Description |
+|-----------|-------------|
+| `MLPEncoder` | Simple graph encoder with separate node and optional edge MLPs |
+| `MLPMeshEncoder` | MeshGraphNets-style encoder with node, edge, and optional global MLPs |
+| `make_mlp_encoder()` | Factory function for creating MLP encoders |
+
+### Decoders (components.decoders)
+
+| Component | Description |
+|-----------|-------------|
+| `MLPDecoder` | Simple MLP decoder operating on node features |
+| `IndependentMLPDecoder` | Separate MLPs for each output component (multi-task) |
+| `ProbeDecoder` | Arbitrary query point decoder for continuous fields |
+
+### Residual Connections (components.layers)
+
+| Component | Description |
+|-----------|-------------|
+| `Residual` | Basic residual wrapper: `x + f(x)` |
+| `ResidualBlock` | Configurable wrapper with 'add', 'scaled', or 'none' types |
+| `GatedResidual` | Learnable gate: `(1-g)*x + g*f(x)` (Highway-style) |
+| `PreNormResidual` | Pre-normalization block (Transformer Pre-LN style) |
+| `ResidualSequence` | Sequence of residual blocks with consistent interface |
+| `SkipConnection` | Flexible skip with optional projection for dimension changes |
+| `make_residual()` | Factory function to create residual wrapper by type |
+
+### Attention & Transformer Components (components.transformer)
+
+| Component | Description |
+|-----------|-------------|
+| `MultiHeadAttention` | Standard multi-head self-attention |
+| `TransformerBlock` | Full transformer block with attention, MLP, and optional conditioning |
+| `PhysicsTokenAttention` | Transolver-style slice-attention-deslice (O(G²) vs O(N²)) |
+| `TransformerProcessor` | Multi-layer transformer processor for graph nodes |
+
+### Conditioning System (components.transformer)
+
+The framework provides a pluggable conditioning protocol for transformer-based models:
+
+| Component | Description |
+|-----------|-------------|
+| `Modulation` | Dataclass: shift, scale, gate, cross_kv parameters for attention modulation |
+| `ConditioningProtocol` | ABC for implementing custom conditioning schemes |
+| `ZeroConditioning` | Identity passthrough (no modulation) |
+| `AdaLNConditioning` | Single-source Adaptive Layer Normalization |
+| `DualAdaLNConditioning` | UniSolver-style dual conditioning (μ + f embeddings) |
+| `FiLMConditioning` | Feature-wise Linear Modulation (γ, β) |
+
+```python
+from gnn_pde_v2.components import (
+    Modulation, ConditioningProtocol, AdaLNConditioning, FiLMConditioning
+)
+
+# Use AdaLN conditioning with transformer
+conditioner = AdaLNConditioning(cond_dim=64, out_dim=128)
+block = TransformerBlock(dim=128, conditioner=conditioner)
+
+# Or implement custom conditioning
+class MyConditioning(ConditioningProtocol):
+    def forward(self, cond: torch.Tensor) -> Modulation:
+        # Custom logic to produce modulation parameters
+        return Modulation(shift=..., scale=..., gate=..., cross_kv=...)
+```
+
+### FNO Components (components.fno)
+
+| Component | Description |
+|-----------|-------------|
+| `SpectralConv` | Spectral convolution with learnable complex weights in Fourier space |
+| `FNOBlock` | Standard Fourier Neural Operator block |
+| `AFNOBlock` | Adaptive FNO with block-diagonal weights and soft-thresholding |
+| `FNOProcessor` | Complete FNO processor with lifting, blocks, and projection |
+
+### Probe Components (components.probe)
+
+| Component | Description |
+|-----------|-------------|
+| `ProbeMessagePassingLayer` | Single message passing layer for probe graphs |
+| `ProbeDecoder` | Decoder for arbitrary query points |
 
 ### Processors
 
 | Type | Component | Key Features |
 |------|-----------|--------------|
 | **Graph-based** | `GraphNetBlock` | Message passing, edge updates |
-| **Attention** | `TransformerBlock` | Multi-head attention, physics tokens |
+| **Graph Processor** | `GraphNetProcessor` | Multiple GraphNet blocks in sequence |
+| **Attention** | `TransformerBlock` | Multi-head attention, physics tokens, conditioning |
+| **Transformer Processor** | `TransformerProcessor` | Multi-layer transformer for nodes |
 | **Spectral** | `FNOBlock` | FFT-based global convolution |
-| **Hybrid** | `GraphNetProcessor` | Multiple GraphNet blocks |
+| **Spectral Processor** | `FNOProcessor` | Complete FNO with lifting/projection |
 
 ### Research Reproductions
 
@@ -280,8 +400,18 @@ model = MeshGraphNets(
 The framework supports several extension mechanisms:
 
 1. **Component Extension**: Inherit from existing components
-2. **Model Registration**: Use `BaseModel` for auto-registration
-3. **Configuration**: Extend Pydantic configs for new parameters
-4. **Paper Reproduction**: Follow examples pattern for new papers
+2. **Model Registration**: Use `AutoRegisterModel` (inherits from `BaseModel`) for config-based instantiation
+3. **Custom Conditioning**: Implement `ConditioningProtocol` for new modulation schemes
+4. **Configuration**: Extend Pydantic configs for new parameters
+5. **Paper Reproduction**: Follow examples pattern for new papers
+
+### Model Hierarchy
+
+```
+nn.Module
+    └── BaseModel (core.base)           # Minimal marker class, no magic
+            └── AutoRegisterModel       # Adds registry, create(), list_models()
+                    └── YourModel       # Custom models with auto-registration
+```
 
 See `examples/README.md` for detailed extension guidelines and design patterns used in research reproductions.
