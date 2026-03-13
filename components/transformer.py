@@ -4,12 +4,141 @@ Transformer processor with optional physics tokens.
 Standard multi-head attention or Transolver-style slice-attention-deslice.
 """
 
-from typing import Optional
+from abc import ABC, abstractmethod
+from dataclasses import dataclass
+from typing import Any, Optional
+
+from torch import Tensor
+
 import torch
 import torch.nn as nn
 import math
+
 from ..core.graph import GraphsTuple
 
+
+# =============================================================================
+# Conditioning Protocol
+# =============================================================================
+
+@dataclass
+class Modulation:
+    """Container for transformer modulation parameters."""
+    shift: Tensor | None = None
+    scale: Tensor | None = None
+    gate: Tensor | None = None
+    cross_kv: Tensor | None = None
+
+
+class ConditioningProtocol(nn.Module, ABC):
+    """Abstract base class for conditioning mechanisms."""
+
+    @abstractmethod
+    def forward(self, condition: Any) -> Modulation:
+        """Convert condition to modulation parameters."""
+        ...
+
+
+class ZeroConditioning(ConditioningProtocol):
+    """Identity conditioning - no modulation applied."""
+
+    def forward(self, condition: Any = None) -> Modulation:
+        return Modulation()
+
+
+class AdaLNConditioning(ConditioningProtocol):
+    """Single-source AdaLN conditioning."""
+
+    def __init__(self, cond_dim: int, out_dim: int):
+        super().__init__()
+        self.cond_dim = cond_dim
+        self.out_dim = out_dim
+        # 6 * out_dim: (shift, scale, gate) x 2 for attn+mlp
+        self.proj = nn.Sequential(
+            nn.SiLU(),
+            nn.Linear(cond_dim, 6 * out_dim)
+        )
+        # Zero init for identity start
+        nn.init.zeros_(self.proj[1].weight)
+        nn.init.zeros_(self.proj[1].bias)
+
+    def forward(self, condition: Tensor) -> Modulation:
+        params = self.proj(condition).chunk(6, dim=-1)
+        return Modulation(
+            shift=torch.cat([params[0], params[3]], dim=-1),
+            scale=torch.cat([params[1], params[4]], dim=-1),
+            gate=torch.cat([params[2], params[5]], dim=-1),
+        )
+
+
+class DualAdaLNConditioning(ConditioningProtocol):
+    """Dual-source AdaLN conditioning (Unisolver-style: μ + f)."""
+
+    def __init__(
+        self,
+        mu_dim: int,
+        f_dim: int,
+        out_dim: int,
+        split_ratio: float = 0.25,
+    ):
+        super().__init__()
+        self.mu_dim = mu_dim
+        self.f_dim = f_dim
+        self.split_ratio = split_ratio
+
+        mu_out = int(out_dim * split_ratio)
+        f_out = out_dim - mu_out
+
+        self.proj_mu = nn.Sequential(nn.SiLU(), nn.Linear(mu_dim, 6 * mu_out))
+        self.proj_f = nn.Sequential(nn.SiLU(), nn.Linear(f_dim, 6 * f_out))
+
+        # Zero init for identity start
+        for proj in [self.proj_mu, self.proj_f]:
+            nn.init.zeros_(proj[1].weight)
+            nn.init.zeros_(proj[1].bias)
+
+    def forward(self, condition: Tensor) -> Modulation:
+        mu = condition[..., : self.mu_dim]
+        f = condition[..., self.mu_dim :]
+
+        params_mu = self.proj_mu(mu).chunk(6, dim=-1)
+        params_f = self.proj_f(f).chunk(6, dim=-1)
+
+        return Modulation(
+            shift=torch.cat([params_mu[0], params_f[0]], dim=-1),
+            scale=torch.cat([params_mu[1], params_f[1]], dim=-1),
+            gate=torch.cat([params_mu[2], params_f[2]], dim=-1),
+        )
+
+
+class FiLMConditioning(ConditioningProtocol):
+    """FiLM-style conditioning (feature-wise linear modulation)."""
+
+    def __init__(self, cond_dim: int, out_dim: int):
+        super().__init__()
+        self.gamma_proj = nn.Linear(cond_dim, out_dim)
+        self.beta_proj = nn.Linear(cond_dim, out_dim)
+
+    def forward(self, condition: Tensor) -> Modulation:
+        return Modulation(
+            shift=self.beta_proj(condition),
+            scale=self.gamma_proj(condition),
+            gate=None,
+        )
+
+
+def _apply_modulation(x: Tensor, mod: Modulation) -> Tensor:
+    """Apply modulation to tensor."""
+    if mod.scale is not None:
+        x = x * (1 + mod.scale)
+    if mod.shift is not None:
+        x = x + mod.shift
+    return x
+
+
+# =============================================================================
+# Attention Components
+# =============================================================================
 
 class MultiHeadAttention(nn.Module):
     """Standard multi-head self-attention."""
