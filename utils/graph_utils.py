@@ -8,6 +8,24 @@ import torch.nn.functional as F
 from ..core.graph import GraphsTuple
 
 
+# Check for torch_cluster availability at module level
+_TORCH_CLUSTER_AVAILABLE = True
+try:
+    from torch_cluster import knn_graph as _torch_knn_graph
+    from torch_cluster import radius_graph as _torch_radius_graph
+except ImportError:
+    _TORCH_CLUSTER_AVAILABLE = False
+    _torch_knn_graph = None
+    _torch_radius_graph = None
+
+
+_TORCH_CLUSTER_ERROR = (
+    "{func} requires 'torch_cluster' to be installed. "
+    "Install it with: pip install torch-cluster "
+    "(or pip install torch-cluster -f https://data.pyg.org/whl/torch-{version}.html for CUDA support)"
+)
+
+
 def knn_graph(
     positions: torch.Tensor,
     k: int,
@@ -24,12 +42,18 @@ def knn_graph(
     Returns:
         (edge_index, edge_attr) where edge_index is [2, E]
     """
-    from torch_cluster import knn_graph as torch_knn_graph
-    
+    if not _TORCH_CLUSTER_AVAILABLE:
+        raise ImportError(
+            _TORCH_CLUSTER_ERROR.format(
+                func="knn_graph",
+                version=torch.__version__.split('+')[0]
+            )
+        )
+
     if batch is None:
         batch = torch.zeros(positions.shape[0], dtype=torch.long, device=positions.device)
     
-    edge_index = torch_knn_graph(positions, k, batch, loop=False)
+    edge_index = _torch_knn_graph(positions, k, batch, loop=False)
     
     # Compute edge features (relative positions)
     senders = edge_index[0]
@@ -60,12 +84,18 @@ def radius_graph(
     Returns:
         (edge_index, edge_attr)
     """
-    from torch_cluster import radius_graph as torch_radius_graph
-    
+    if not _TORCH_CLUSTER_AVAILABLE:
+        raise ImportError(
+            _TORCH_CLUSTER_ERROR.format(
+                func="radius_graph",
+                version=torch.__version__.split('+')[0]
+            )
+        )
+
     if batch is None:
         batch = torch.zeros(positions.shape[0], dtype=torch.long, device=positions.device)
     
-    edge_index = torch_radius_graph(
+    edge_index = _torch_radius_graph(
         positions, r, batch, loop=False, max_num_neighbors=max_num_neighbors
     )
     
@@ -145,8 +175,14 @@ def mesh_to_graph(
         receivers = torch.cat([edges[1], edges[0]])
     else:
         # No faces provided - use KNN
-        from torch_cluster import knn_graph
-        edge_index = knn_graph(vertices, k=6, loop=False)
+        if not _TORCH_CLUSTER_AVAILABLE:
+            raise ImportError(
+                _TORCH_CLUSTER_ERROR.format(
+                    func="mesh_to_graph (with faces=None)",
+                    version=torch.__version__.split('+')[0]
+                )
+            )
+        edge_index = _torch_knn_graph(vertices, k=6, loop=False)
         senders = edge_index[0]
         receivers = edge_index[1]
     

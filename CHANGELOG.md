@@ -7,7 +7,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.6.0] - 2026-03-13
 
-### Removed
+### Added
+
+- **Improved dependency error handling** in `utils/graph_utils.py`:
+  - Added module-level check for `torch_cluster` availability
+  - Added helpful error messages with installation instructions for:
+    - `knn_graph()` - raises `ImportError` with pip instructions
+    - `radius_graph()` - raises `ImportError` with pip instructions
+    - `mesh_to_graph()` (when `faces=None`) - raises `ImportError` with pip instructions
+  - Error messages include both standard pip command and CUDA-specific installation URL
+
+- **Implemented lazy loading with helpful errors** in `models/__init__.py`:
+  - Added `__getattr__` for lazy imports of optional models
+  - Models are only imported when accessed, not at module load time
+  - Provides clear error messages when dependencies are missing
 
 - **Eliminated `convenient/` layer entirely**:
   - Removed `convenient/config.py` — Pydantic-based configurations deleted
