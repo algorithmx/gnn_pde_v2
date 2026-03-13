@@ -35,7 +35,7 @@ from gnn_pde_v2.components import FourierFeatureEncoder
 from gnn_pde_v2.convenient import AutoRegisterModel, get_initializer, Model
 
 
-class DeepXDEModel(AutoRegisterModel, name='deepxde'):
+class DeepXDEModel(AutoRegisterModel, name='deepxde', namespace='example'):
     """
     DeepXDE-style Physics-Informed Neural Network using gnn_pde_v2 framework.
 

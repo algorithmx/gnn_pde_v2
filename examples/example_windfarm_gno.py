@@ -59,7 +59,7 @@ def make_windfarm_mlp(
     )
 
 
-class WindFarmGNO(AutoRegisterModel, name='windfarm_gno'):
+class WindFarmGNO(AutoRegisterModel, name='windfarm_gno', namespace='example'):
     """
     Wind-Farm-GNO implementation using gnn_pde_v2 framework components.
     

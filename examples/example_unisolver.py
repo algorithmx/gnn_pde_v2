@@ -35,7 +35,7 @@ def modulate(x, shift, scale):
     return x * (1 + scale) + shift
 
 
-class Unisolver(AutoRegisterModel, name='unisolver'):
+class Unisolver(AutoRegisterModel, name='unisolver', namespace='example'):
     """
     Unisolver implementation using gnn_pde_v2 framework components.
     

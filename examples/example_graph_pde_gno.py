@@ -31,7 +31,7 @@ from gnn_pde_v2.convenient import AutoRegisterModel
 from gnn_pde_v2.core import MLP
 
 
-class GraphPDE_GNO(AutoRegisterModel, name='graph_pde_gno'):
+class GraphPDE_GNO(AutoRegisterModel, name='graph_pde_gno', namespace='example'):
     """
     Graph-PDE GNO implementation using gnn_pde_v2 framework components.
     

@@ -18,7 +18,7 @@ from gnn_pde_v2.core import MLP
 from gnn_pde_v2.components import GraphNetBlock
 
 
-class EasyMeshGraphNets(AutoRegisterModel, name='meshgraphnets_easy'):
+class EasyMeshGraphNets(AutoRegisterModel, name='meshgraphnets_easy', namespace='example'):
     """
     MeshGraphNets with auto-registration.
     
