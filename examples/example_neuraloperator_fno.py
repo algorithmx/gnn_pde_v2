@@ -30,7 +30,7 @@ from gnn_pde_v2.components import FNOProcessor, SpectralConv
 from gnn_pde_v2.core import MLP
 
 
-class NeuralOperatorFNO(AutoRegisterModel, name='neuraloperator_fno'):
+class NeuralOperatorFNO(AutoRegisterModel, name='neuraloperator_fno', namespace='example'):
     """
     Precise equivalent of neuraloperator's FNO model using gnn_pde_v2 framework.
     
@@ -279,7 +279,7 @@ class FNOBlockFramework(nn.Module):
 # Alternative: Simple FNO using framework's FNOProcessor
 # ============================================================================
 
-class SimpleFNO(AutoRegisterModel, name='simple_fno'):
+class SimpleFNO(AutoRegisterModel, name='simple_fno', namespace='example'):
     """
     Simplified FNO using framework's FNOProcessor directly.
     

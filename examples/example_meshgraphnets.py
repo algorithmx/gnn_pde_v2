@@ -100,7 +100,7 @@ class MeshGraphNetsGNBlock(nn.Module):
         return graph.replace(nodes=new_nodes, edges=new_edges)
 
 
-class MeshGraphNets(AutoRegisterModel, name='meshgraphnets'):
+class MeshGraphNets(AutoRegisterModel, name='meshgraphnets', namespace='example'):
     """MeshGraphNets implementation aligned to `meshgraphnets_pytorch`."""
     
     def __init__(

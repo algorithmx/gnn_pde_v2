@@ -30,7 +30,7 @@ from gnn_pde_v2.convenient import AutoRegisterModel
 from gnn_pde_v2.core import MLP
 
 
-class Transolver(AutoRegisterModel, name='transolver'):
+class Transolver(AutoRegisterModel, name='transolver', namespace='example'):
     """
     Transolver implementation using gnn_pde_v2 framework components.
     

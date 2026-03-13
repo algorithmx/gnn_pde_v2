@@ -181,7 +181,7 @@ class NN(nn.Module, ABC):
         pass
 
 
-class DeepONet(NN, AutoRegisterModel, name='deeponet'):
+class DeepONet(NN, AutoRegisterModel, name='deeponet', namespace='example'):
     """
     Deep Operator Network using framework's MLP.
 
