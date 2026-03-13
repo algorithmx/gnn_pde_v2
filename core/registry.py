@@ -1,13 +1,13 @@
 """
-Auto-registration for model classes (optional convenience).
+Auto-registration for model classes.
 
-This is an OPTIONAL feature. For lean usage, use plain nn.Module.
+Provides optional registry-based model instantiation for config-driven workflows.
 """
 
 from typing import Dict, Type, ClassVar, Optional
 import warnings
 
-from gnn_pde_v2.core.base import BaseModel
+from .base import BaseModel
 
 
 class AutoRegisterModel(BaseModel):
@@ -134,3 +134,36 @@ class AutoRegisterModel(BaseModel):
             'module': model_cls.__module__,
             'qualname': model_cls.__qualname__,
         }
+
+    @classmethod
+    def unregister(cls, name: str) -> None:
+        """
+        Remove a model from the registry.
+
+        Args:
+            name: Registered model name to remove
+
+        Raises:
+            KeyError: If model name is not registered
+        """
+        name = name.lower()
+        if name not in cls._registry:
+            raise KeyError(f"Model '{name}' is not registered")
+        del AutoRegisterModel._registry[name]
+
+    @classmethod
+    def clear_registry(cls, namespace: Optional[str] = None) -> None:
+        """
+        Clear all registered models, or only those in a given namespace.
+
+        Args:
+            namespace: If provided, only remove models whose names start with
+                ``'<namespace>.'``.  If ``None``, clear the entire registry.
+        """
+        if namespace is None:
+            AutoRegisterModel._registry.clear()
+        else:
+            prefix = f"{namespace.lower()}."
+            keys = [k for k in AutoRegisterModel._registry if k.startswith(prefix)]
+            for k in keys:
+                del AutoRegisterModel._registry[k]

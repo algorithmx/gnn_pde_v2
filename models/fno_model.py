@@ -5,15 +5,29 @@ Convenience models for Fourier Neural Operators.
 from typing import List, Optional
 import torch
 import torch.nn as nn
-from ..convenient.registry import AutoRegisterModel
-from ..components.fno import FNOProcessor
+from ..core.registry import AutoRegisterModel
+from ..components.spectral import FNOProcessor
 
 
 class FNO(AutoRegisterModel, name='fno'):
     """
     Fourier Neural Operator for regular grids.
     
-    Direct use of FNOProcessor with simple API.
+    Direct use of FNOProcessor with simple API. Learns solution operators
+    for PDEs in the Fourier space.
+    
+    Args:
+        in_channels: Number of input channels (e.g., initial condition + parameters)
+        out_channels: Number of output channels (e.g., solution at next timestep)
+        width: Width of the FNO (hidden dimension in Fourier space)
+        modes: Number of Fourier modes per dimension (e.g., [16, 16] for 2D)
+        n_layers: Number of spectral convolution layers
+        n_dim: Spatial dimension (1, 2, or 3)
+        
+    Example:
+        >>> model = FNO(in_channels=1, out_channels=1, width=64, modes=[16, 16])
+        >>> x = torch.randn(1, 1, 64, 64)  # [B, C, H, W]
+        >>> y = model(x)  # [B, C, H, W]
     """
     
     def __init__(
@@ -54,7 +68,16 @@ class TFNO(AutoRegisterModel, name='tfno'):
     """
     Tensorized Fourier Neural Operator (TFNO).
     
-    Uses separable spectral convolutions for efficiency.
+    Uses separable spectral convolutions for improved efficiency.
+    Similar to FNO but with factorized weight tensors.
+    
+    Args:
+        in_channels: Number of input channels
+        out_channels: Number of output channels
+        width: Width of the TFNO (hidden dimension)
+        modes: Number of Fourier modes per dimension
+        n_layers: Number of spectral convolution layers
+        n_dim: Spatial dimension (1, 2, or 3)
     """
     
     def __init__(
@@ -96,7 +119,17 @@ class AFNO(AutoRegisterModel, name='afno'):
     """
     Adaptive Fourier Neural Operator.
     
-    Uses block-diagonal weights and soft-thresholding.
+    Uses block-diagonal weights and soft-thresholding for improved
+    performance on high-resolution inputs.
+    
+    Args:
+        in_channels: Number of input channels
+        out_channels: Number of output channels
+        width: Width of the AFNO (hidden dimension)
+        modes: Number of Fourier modes per dimension
+        n_layers: Number of spectral convolution layers
+        n_dim: Spatial dimension (1, 2, or 3)
+        num_blocks: Number of blocks for block-diagonal weight matrix
     """
     
     def __init__(

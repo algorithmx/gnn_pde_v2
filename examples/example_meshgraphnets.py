@@ -197,9 +197,9 @@ class MeshGraphNets(AutoRegisterModel, name='meshgraphnets', namespace='example'
         """Save model configuration."""
         return {
             'model_type': 'meshgraphnets',
-            'node_input_size': self.node_encoder.net[0].in_features,
-            'edge_input_size': self.edge_encoder.net[0].in_features,
-            'output_size': self.decoder.net[-1].out_features if isinstance(self.decoder.net[-1], nn.Linear) else self.decoder.net[-2].out_features,
+            'node_input_size': self.node_encoder.in_features,
+            'edge_input_size': self.edge_encoder.in_features,
+            'output_size': self.decoder.out_features,
             'hidden_size': self.hidden_size,
             'n_layers': self.n_layers,
         }

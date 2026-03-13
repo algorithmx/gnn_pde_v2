@@ -19,21 +19,81 @@ using physics-informed neural networks (PINNs).
 This implementation uses the gnn_pde_v2 framework components:
 - core.MLP for the fully-connected network
 - components.FourierFeatureEncoder for high-frequency features
-- convenient.initializers for weight initialization
-- convenient.Model for training wrapper
+- core.AutoRegisterModel for model registration
+- examples.training_utils.Model for training wrapper
 """
 
 import torch
 import torch.nn as nn
+import torch.nn.init as init
 import numpy as np
 from typing import List, Optional, Callable, Dict, Union
 import math
 
 # Import framework components
 from gnn_pde_v2.core import MLP
+from gnn_pde_v2.core import AutoRegisterModel
 from gnn_pde_v2.components import FourierFeatureEncoder
-from gnn_pde_v2.convenient import AutoRegisterModel, get_initializer
-from gnn_pde_v2.examples.training_utils import Model
+from training_utils import Model
+
+
+# ============================================================================
+# DeepXDE-style Initializers (local to this example)
+# ============================================================================
+
+def get_initializer(name: Union[str, Callable]) -> Callable:
+    """
+    Get initializer function by name (DeepXDE-style).
+
+    Args:
+        name: Initializer name or callable
+
+    Returns:
+        Initialization function
+    """
+    if callable(name):
+        return name
+
+    name = name.lower().strip()
+
+    # Handle constant_X format
+    if name.startswith('constant_'):
+        try:
+            val = float(name.split('_')[1])
+            return lambda t: init.constant_(t, val)
+        except (IndexError, ValueError):
+            pass
+
+    mapping = {
+        # Glorot/Xavier
+        'glorot_uniform': init.xavier_uniform_,
+        'glorot_normal': init.xavier_normal_,
+        'xavier_uniform': init.xavier_uniform_,
+        'xavier_normal': init.xavier_normal_,
+        # He/Kaiming
+        'he_uniform': init.kaiming_uniform_,
+        'he_normal': init.kaiming_normal_,
+        'kaiming_uniform': init.kaiming_uniform_,
+        'kaiming_normal': init.kaiming_normal_,
+        # Others
+        'orthogonal': init.orthogonal_,
+        'uniform': init.uniform_,
+        'normal': init.normal_,
+        'zeros': init.zeros_,
+        'ones': init.ones_,
+    }
+
+    # DeepXDE-style names with spaces
+    mapping['glorot uniform'] = init.xavier_uniform_
+    mapping['glorot normal'] = init.xavier_normal_
+    mapping['he uniform'] = init.kaiming_uniform_
+    mapping['he normal'] = init.kaiming_normal_
+
+    if name not in mapping:
+        available = ', '.join(sorted(set(mapping.keys())))
+        raise ValueError(f"Unknown initializer: '{name}'. Available: [{available}]")
+
+    return mapping[name]
 
 
 class DeepXDEModel(AutoRegisterModel, name='deepxde', namespace='example'):

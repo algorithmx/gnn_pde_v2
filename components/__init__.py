@@ -1,8 +1,18 @@
 """
-Reusable components for building GNN-PDE models.
+Components for building GNN and neural operator architectures.
 
 These are building blocks that can be composed directly.
 No magic, no registry - just standard PyTorch modules.
+
+Graph-based processors (work with GraphsTuple):
+    - GraphNetBlock, GraphNetProcessor
+    - TransformerBlock, TransformerProcessor
+
+Spectral/Grid-based processors (work with regular grid tensors):
+    - FNOProcessor, SpectralConv, FNOBlock, AFNOBlock
+
+Note: Spectral processors are NOT compatible with graph data structures.
+For graph data, use GraphNetProcessor or TransformerProcessor instead.
 
 Note: MLP is now in core. Import with:
     from gnn_pde_v2.core import MLP
@@ -18,15 +28,10 @@ Example:
             self.processor = Residual(GraphNetBlock(128, 128))
 """
 
-from .encoders import MLPEncoder, MLPMeshEncoder, make_mlp_encoder
 from .fourier_encoder import FourierFeatureEncoder
 from .layers import (
     Residual,
-    ResidualBlock,
     GatedResidual,
-    PreNormResidual,
-    ResidualSequence,
-    SkipConnection,
     make_residual,
 )
 from .processors import GraphNetBlock, GraphNetProcessor
@@ -38,21 +43,14 @@ from .transformer import (
     Modulation, ConditioningProtocol,
     ZeroConditioning, AdaLNConditioning, DualAdaLNConditioning, FiLMConditioning,
 )
-from .fno import FNOProcessor, SpectralConv, FNOBlock
+from .spectral import FNOProcessor, SpectralConv, FNOBlock, AFNOBlock
 
 __all__ = [
     # Encoders
-    "MLPEncoder",
-    "MLPMeshEncoder",
-    "make_mlp_encoder",
     "FourierFeatureEncoder",
     # Layers (residual connections)
     "Residual",
-    "ResidualBlock",
     "GatedResidual",
-    "PreNormResidual",
-    "ResidualSequence",
-    "SkipConnection",
     "make_residual",
     # Processors
     "GraphNetBlock",
@@ -64,6 +62,7 @@ __all__ = [
     "FNOProcessor",
     "SpectralConv",
     "FNOBlock",
+    "AFNOBlock",
     # Decoders
     "MLPDecoder",
     "IndependentMLPDecoder",

@@ -14,20 +14,20 @@ from ..core.mlp import MLP
 class ProbeDecoder(nn.Module):
     """
     Decoder for arbitrary query points using probe mechanism.
-    
+
     Two-stage approach:
     1. Process source graph (already done by processor)
     2. Message pass from source to probe locations
     3. Decode at probe locations
-    
+
     Reference: Wind-Farm-GNO probe-based decoder.
     """
-    
+
     def __init__(
         self,
-        node_dim: int,
-        edge_dim: int,
-        out_dim: int,
+        latent_dim: int,
+        edge_dim: int = 32,
+        out_dim: int = 3,
         hidden_dim: int = 128,
         n_probe_layers: int = 2,
         k_nearest: int = 3,
@@ -35,36 +35,36 @@ class ProbeDecoder(nn.Module):
         activation: str = 'gelu',
     ):
         super().__init__()
-        
-        self.node_dim = node_dim
+
+        self.latent_dim = latent_dim
         self.edge_dim = edge_dim
         self.out_dim = out_dim
         self.k_nearest = k_nearest
         self.distance_encoding = distance_encoding
-        
+
         # Edge encoder: encode distance to edge features
         if distance_encoding == 'rbf':
             # RBF encoding dimension
             edge_input_dim = k_nearest  # One feature per neighbor
         else:
             edge_input_dim = k_nearest * 2  # Position differences
-        
+
         self.edge_encoder = MLP(
             in_dim=edge_input_dim,
             out_dim=edge_dim,
             hidden_dims=[hidden_dim],
             activation=activation,
         )
-        
+
         # Probe processor layers
         self.probe_layers = nn.ModuleList([
-            ProbeMessagePassingLayer(node_dim, edge_dim, hidden_dim, activation)
+            ProbeMessagePassingLayer(latent_dim, edge_dim, hidden_dim, activation)
             for _ in range(n_probe_layers)
         ])
-        
+
         # Output MLP
         self.output_mlp = MLP(
-            in_dim=node_dim,
+            in_dim=latent_dim,
             out_dim=out_dim,
             hidden_dims=[hidden_dim, hidden_dim],
             activation=activation,
@@ -181,35 +181,59 @@ class ProbeDecoder(nn.Module):
 
 
 class ProbeMessagePassingLayer(nn.Module):
-    """Single message passing layer for probe graph."""
+    """
+    Single message passing layer for probe graph.
     
+    Performs one step of message passing from source nodes to probe nodes:
+    1. Update edges based on sender/receiver nodes and current edge features
+    2. Aggregate messages to receiver (probe) nodes
+    3. Update node features
+    
+    Args:
+        latent_dim: Dimension for node features
+        edge_dim: Dimension for edge features
+        hidden_dim: Hidden dimension for MLPs
+        activation: Activation function ('relu', 'gelu', 'silu', 'tanh')
+    """
+
     def __init__(
         self,
-        node_dim: int,
+        latent_dim: int,
         edge_dim: int,
         hidden_dim: int,
         activation: str = 'gelu',
     ):
         super().__init__()
-        
-        # Edge update
+
+        self.latent_dim = latent_dim
+        self.edge_dim = edge_dim
+
+        # Edge update: [sender_node, receiver_node, edge] -> new_edge
         self.edge_mlp = MLP(
-            in_dim=2 * node_dim + edge_dim,
+            in_dim=2 * latent_dim + edge_dim,
             out_dim=edge_dim,
             hidden_dims=[hidden_dim],
             activation=activation,
         )
-        
-        # Node update
+
+        # Node update: [node, aggregated_edges] -> new_node
         self.node_mlp = MLP(
-            in_dim=node_dim + edge_dim,
-            out_dim=node_dim,
+            in_dim=latent_dim + edge_dim,
+            out_dim=latent_dim,
             hidden_dims=[hidden_dim],
             activation=activation,
         )
     
     def forward(self, graph: GraphsTuple) -> GraphsTuple:
-        """One message passing step."""
+        """
+        One message passing step.
+        
+        Args:
+            graph: Input GraphsTuple with nodes, edges, senders, receivers
+            
+        Returns:
+            Updated GraphsTuple with new node and edge features (with residual)
+        """
         nodes = graph.nodes
         edges = graph.edges
         receivers = graph.receivers

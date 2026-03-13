@@ -9,7 +9,7 @@ import torch
 from dataclasses import replace
 
 from gnn_pde_v2 import GraphsTuple, batch_graphs, unbatch_graphs
-from gnn_pde_v2.core import scatter_sum, scatter_mean, scatter_max
+from gnn_pde_v2.core import scatter_sum, scatter_mean, scatter_max, scatter_min, scatter_softmax
 from gnn_pde_v2.core.functional import aggregate_edges, broadcast_nodes_to_edges
 
 
@@ -180,11 +180,45 @@ class TestScatterOperations:
         """Test scatter_max."""
         src = torch.tensor([[1.0], [3.0], [2.0], [4.0]], device=device)
         index = torch.tensor([0, 0, 1, 1], device=device)
-        
+
         out = scatter_max(src, index, dim=0, dim_size=2)
-        
+
         expected = torch.tensor([[3.0], [4.0]], device=device)
         assert torch.allclose(out, expected)
+
+    def test_scatter_min(self, device):
+        """Test scatter_min."""
+        src = torch.tensor([[1.0], [3.0], [2.0], [4.0]], device=device)
+        index = torch.tensor([0, 0, 1, 1], device=device)
+
+        out = scatter_min(src, index, dim=0, dim_size=2)
+
+        expected = torch.tensor([[1.0], [2.0]], device=device)
+        assert torch.allclose(out, expected)
+
+    def test_scatter_softmax(self, device):
+        """Test scatter_softmax."""
+        src = torch.tensor([[1.0], [2.0], [3.0], [1.0]], device=device)
+        index = torch.tensor([0, 0, 1, 1], device=device)
+
+        out = scatter_softmax(src, index, dim=0, dim_size=2)
+
+        # Check that values sum to 1 per group
+        group_0_sum = out[0] + out[1]  # indices 0, 0
+        group_1_sum = out[2] + out[3]  # indices 1, 1
+
+        assert torch.allclose(group_0_sum, torch.tensor([1.0], device=device))
+        assert torch.allclose(group_1_sum, torch.tensor([1.0], device=device))
+
+        # Verify softmax values are correct
+        expected_0 = torch.exp(torch.tensor([1.0], device=device)) / (
+            torch.exp(torch.tensor([1.0], device=device)) + torch.exp(torch.tensor([2.0], device=device))
+        )
+        expected_1 = torch.exp(torch.tensor([2.0], device=device)) / (
+            torch.exp(torch.tensor([1.0], device=device)) + torch.exp(torch.tensor([2.0], device=device))
+        )
+        assert torch.allclose(out[0], expected_0, atol=1e-6)
+        assert torch.allclose(out[1], expected_1, atol=1e-6)
     
     def test_scatter_multi_dim(self, device):
         """Test scatter with multi-dimensional features."""

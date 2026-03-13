@@ -45,7 +45,7 @@ model = MeshGraphNets(
     edge_input_size=3,       # relative displacement
     output_size=3,           # acceleration
     hidden_size=128,
-    message_passing_steps=15,
+    n_layers=15,
 )
 ```
 

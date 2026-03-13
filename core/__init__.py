@@ -6,10 +6,13 @@ from .functional import (
     scatter_sum,
     scatter_mean,
     scatter_max,
+    scatter_min,
+    scatter_softmax,
     aggregate_edges,
     broadcast_nodes_to_edges,
 )
 from .mlp import MLP, SinActivation
+from .registry import AutoRegisterModel
 
 __all__ = [
     "GraphsTuple",
@@ -19,8 +22,11 @@ __all__ = [
     "scatter_sum",
     "scatter_mean",
     "scatter_max",
+    "scatter_min",
+    "scatter_softmax",
     "aggregate_edges",
     "broadcast_nodes_to_edges",
     "MLP",
     "SinActivation",
+    "AutoRegisterModel",
 ]

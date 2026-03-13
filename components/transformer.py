@@ -14,6 +14,7 @@ import torch
 import torch.nn as nn
 import math
 
+from ..core.mlp import MLP
 from ..core.graph import GraphsTuple
 
 
@@ -308,8 +309,6 @@ class TransformerBlock(nn.Module):
         mlp_dim = int(dim * mlp_ratio)
 
         # Use framework's MLP
-        from ..core.mlp import MLP
-
         self.mlp = MLP(
             in_dim=dim,
             out_dim=dim,
@@ -333,13 +332,13 @@ class TransformerBlock(nn.Module):
 class TransformerProcessor(nn.Module):
     """
     Transformer-based processor for graph nodes.
-    
+
     Can use full attention or physics-token attention for efficiency.
     """
-    
+
     def __init__(
         self,
-        node_dim: int,
+        latent_dim: int,
         n_layers: int = 4,
         n_heads: int = 8,
         mlp_ratio: float = 4.0,
@@ -348,10 +347,10 @@ class TransformerProcessor(nn.Module):
         n_tokens: int = 32,
     ):
         super().__init__()
-        
+
         self.blocks = nn.ModuleList([
             TransformerBlock(
-                dim=node_dim,
+                dim=latent_dim,
                 n_heads=n_heads,
                 mlp_ratio=mlp_ratio,
                 dropout=dropout,
@@ -360,7 +359,7 @@ class TransformerProcessor(nn.Module):
             )
             for _ in range(n_layers)
         ])
-        
+
         self.use_physics_tokens = use_physics_tokens
     
     def forward(self, graph: GraphsTuple) -> GraphsTuple:

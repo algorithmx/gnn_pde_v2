@@ -5,6 +5,130 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.4.0] - 2026-03-13
+
+### Added
+
+- **`scatter_min` and `scatter_softmax` in `core.functional`**: Extended aggregation operations for graph message passing
+- **`AFNOBlock` in `components/spectral`**: Adaptive Fourier Neural Operator block with soft-thresholding sparsity (Guibas et al. 2021)
+- **`docs/architecture-dependencies.md`**: Documentation for module dependency structure
+
+### Changed
+
+- **Moved `AutoRegisterModel` from `convenient` to `core`**:
+  - `convenient/registry.py` → `core/registry.py`
+  - Registry is now a core feature, not convenience layer
+  - Eliminates circular dependency: models no longer depend on convenient layer
+  
+- **Renamed `components/fno.py` → `components/spectral.py`**:
+  - Clearer intent: spectral methods for regular grids (not graph-compatible)
+  - Added explicit documentation that spectral processors work on tensors, not GraphsTuple
+  - Exported `AFNOBlock` alongside existing FNO components
+
+- **Simplified encoders (`components/encoders.py`)**:
+  - Removed `MLPEncoder`, `MLPMeshEncoder`, and `make_mlp_encoder` helper
+  - Consolidated into single `MeshEncoder` class with clean API:
+    ```python
+    MeshEncoder(node_in_dim, edge_in_dim, global_in_dim, latent_dim, hidden_dim=128)
+    ```
+  - Simplified MLP configuration (removed per-parameter weight_init, bias_init, dropout)
+
+- **Consolidated residual connections (`components/layers.py`)**:
+  - Removed `ResidualBlock`, `PreNormResidual`, `ResidualSequence`, `SkipConnection`
+  - Consolidated into unified `Residual` class supporting:
+    - Optional normalization (any `nn.Module`)
+    - Optional scaling (fixed or learnable)
+  - `make_residual` factory updated to use simplified classes
+  - `GatedResidual` preserved for learnable gating use cases
+
+- **Standardized processor API (`components/processors.py`)**:
+  - Unified dimension parameters: `node_dim` + `edge_dim` → single `latent_dim`
+  - `global_dim` → `global_latent_dim` for consistency
+  - All features (nodes, edges, globals) share the same latent dimension
+  - Better docstrings with Args/Returns documentation
+
+- **Standardized decoder API (`components/decoders.py`)**:
+  - `node_dim` → `latent_dim` parameter name
+  - Consistent with encoder/processor terminology
+
+- **Standardized probe decoder (`components/probe.py`)**:
+  - `node_dim` → `latent_dim` parameter name
+  - Added comprehensive docstrings
+
+- **Standardized model parameters**:
+  - `n_message_passing` / `message_passing_steps` → `n_layers` consistently across all models
+  - Updated `GNNConfig`, `GraphNet`, `MeshGraphNet`, `MeshGraphNets`
+  - README and examples updated
+
+- **Updated `__init__.py` exports**:
+  - Now exports `AutoRegisterModel` from core
+  - Exports `scatter_min`, `scatter_softmax` from core.functional
+
+### Removed
+
+- **`convenient/aggregation.py`**: Aggregation functions now exclusively in `core/functional`
+- **`convenient/initializers.py`**: String-based initialization removed (use functional init directly)
+- **`convenient/registry.py`**: Moved to `core/registry.py`
+- **`make_mlp_encoder` helper**: Direct `MLP` instantiation is clearer
+- **`MLPEncoder` class**: Use `MLP` directly or `MeshEncoder` for graph encoding
+- **`MLPMeshEncoder` class**: Replaced by simplified `MeshEncoder`
+- **Redundant residual classes**: `ResidualBlock`, `PreNormResidual`, `ResidualSequence`, `SkipConnection`
+- **`FNOProcessor.forward_graph` placeholder**: Method was unimplemented; FNO is for grids only
+
+### Fixed
+
+- **Circular dependency resolved**: Models module no longer imports from convenient layer
+- **API consistency**: All processors use `n_layers` for layer count
+- **Dimensional consistency**: All components use `latent_dim` for hidden representation size
+
+### Migration Notes
+
+**Encoder usage:**
+```python
+# Before
+from gnn_pde_v2.components import MLPMeshEncoder
+encoder = MLPMeshEncoder(node_in_dim=11, edge_in_dim=3, global_in_dim=None, 
+                         latent_dim=128, hidden_dims=[128], dropout=0.0)
+
+# After
+from gnn_pde_v2.components import MeshEncoder
+encoder = MeshEncoder(node_in_dim=11, edge_in_dim=3, global_in_dim=None,
+                      latent_dim=128, hidden_dim=128)
+```
+
+**Residual connections:**
+```python
+# Before
+from gnn_pde_v2.components import ResidualBlock, PreNormResidual
+block = ResidualBlock(module, residual_type='scaled', learnable_scale=True)
+pre_norm = PreNormResidual(module, dim=128)
+
+# After
+from gnn_pde_v2.components import Residual
+block = Residual(module, scale=1.0, learnable_scale=True)
+pre_norm = Residual(module, norm=nn.LayerNorm(128))
+```
+
+**Registry import:**
+```python
+# Before
+from gnn_pde_v2.convenient import AutoRegisterModel
+
+# After
+from gnn_pde_v2.core import AutoRegisterModel
+```
+
+**Model configuration:**
+```python
+# Before
+config = GNNConfig(n_message_passing=15, ...)
+model = MeshGraphNet(n_message_passing=15, ...)
+
+# After
+config = GNNConfig(n_layers=15, ...)
+model = MeshGraphNet(n_layers=15, ...)
+```
+
 ## [2.3.4] - 2026-03-13
 
 ### Added

@@ -2,28 +2,31 @@
 Residual connection utilities for GNN-PDE v2.
 
 Provides standardized residual patterns used across different architectures.
-Includes both a simple backward-compatible Residual class and comprehensive variants.
+The primary interface is `Residual` for simple cases, `GatedResidual` for
+learnable gating, and `make_residual` factory for string-based selection.
 """
 
-from typing import Optional, Callable, Literal, Union
+from typing import Optional, Literal
 import torch
 import torch.nn as nn
 
 
 class Residual(nn.Module):
     """
-    Simple residual connection wrapper (backward-compatible API).
+    Simple residual connection wrapper.
 
-    output = x + module(norm(x)) if norm else x + module(x)
+    Formula: output = x + scale * module(norm(x) if norm else x)
 
-    This is the primary interface for simple residual connections.
-    For advanced patterns (gated, scaled, sequences), use the specialized classes below.
+    This is the primary interface for residual connections.
 
     Args:
         module: The module to wrap
         norm: Optional normalization layer (e.g., nn.LayerNorm)
+        scale: Optional scale factor (float or learnable)
+        learnable_scale: Whether scale is learnable (only if scale is float)
 
     Example:
+        >>> # Simple residual
         >>> block = Residual(nn.Sequential(
         ...     nn.Linear(128, 128),
         ...     nn.GELU(),
@@ -36,12 +39,29 @@ class Residual(nn.Module):
         ...     module=nn.MultiheadAttention(128, 8),
         ...     norm=nn.LayerNorm(128),
         ... )
+
+        >>> # With learnable scale
+        >>> block = Residual(nn.Linear(64, 64), scale=0.5, learnable_scale=True)
     """
 
-    def __init__(self, module: nn.Module, norm: Optional[nn.Module] = None):
+    def __init__(
+        self,
+        module: nn.Module,
+        norm: Optional[nn.Module] = None,
+        scale: Optional[float] = None,
+        learnable_scale: bool = False,
+    ):
         super().__init__()
         self.module = module
         self.norm = norm
+
+        if scale is not None:
+            if learnable_scale:
+                self.scale = nn.Parameter(torch.tensor(scale))
+            else:
+                self.register_buffer('scale', torch.tensor(scale))
+        else:
+            self.scale = None
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Apply module with residual connection."""
@@ -49,75 +69,16 @@ class Residual(nn.Module):
         if self.norm is not None:
             x = self.norm(x)
         out = self.module(x)
-        return residual + out
 
-
-class ResidualBlock(nn.Module):
-    """
-    Wrapper that adds residual connections to any module.
-
-    Supports different residual types:
-    - 'add': Simple addition (x + f(x))
-    - 'scaled': Scaled addition with learnable or fixed scale
-    - 'none': No residual (pass-through for compatibility)
-
-    Args:
-        module: The module to wrap
-        residual_type: Type of residual connection
-        scale: Optional fixed scale for residual branch
-        learnable_scale: Whether to learn the residual scale
-
-    Examples:
-        >>> # Simple residual
-        >>> block = ResidualBlock(nn.Linear(64, 64), residual_type='add')
-        >>>
-        >>> # Learnable gated residual
-        >>> block = ResidualBlock(
-        ...     nn.Sequential(nn.Linear(64, 128), nn.ReLU(), nn.Linear(128, 64)),
-        ...     residual_type='scaled',
-        ...     learnable_scale=True
-        ... )
-    """
-
-    def __init__(
-        self,
-        module: nn.Module,
-        residual_type: Literal['add', 'scaled', 'none'] = 'add',
-        scale: Optional[float] = None,
-        learnable_scale: bool = False,
-    ):
-        super().__init__()
-        self.module = module
-        self.residual_type = residual_type
-
-        if residual_type == 'scaled':
-            if learnable_scale:
-                self.scale = nn.Parameter(torch.tensor(1.0 if scale is None else scale))
-            else:
-                self.register_buffer('scale', torch.tensor(1.0 if scale is None else scale))
-        elif residual_type == 'add':
-            self.scale = 1.0
-        else:
-            self.scale = None
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward with residual connection."""
-        out = self.module(x)
-
-        if self.residual_type == 'none':
-            return out
-
-        # Check dimension compatibility
         if x.shape != out.shape:
             raise ValueError(
                 f"Residual shapes don't match: input {x.shape}, output {out.shape}. "
                 "Consider using a projection layer or disable residual."
             )
 
-        return x + self.scale * out
-
-    def __repr__(self) -> str:
-        return f"ResidualBlock(module={self.module}, type={self.residual_type})"
+        if self.scale is not None:
+            return residual + self.scale * out
+        return residual + out
 
 
 class GatedResidual(nn.Module):
@@ -131,10 +92,10 @@ class GatedResidual(nn.Module):
 
     Args:
         module: The module to wrap
-        gate_activation: Activation for gate ('sigmoid', 'tanh', etc.)
+        gate_activation: Activation for gate ('sigmoid', 'tanh', 'hard_sigmoid')
         gate_bias: Initial bias for gate (positive = more residual, negative = less)
 
-    Examples:
+    Example:
         >>> block = GatedResidual(
         ...     nn.Sequential(nn.Linear(64, 64), nn.ReLU()),
         ...     gate_activation='sigmoid',
@@ -191,157 +152,6 @@ class GatedResidual(nn.Module):
         return f"GatedResidual(module={self.module})"
 
 
-class PreNormResidual(nn.Module):
-    """
-    Pre-normalization residual block (Transformer-style).
-
-    Applies LayerNorm before the module, then adds residual:
-        output = x + module(norm(x))
-
-    This is the modern Transformer architecture (Pre-LN) which is more
-    stable for deep networks compared to Post-LN.
-
-    Args:
-        module: The module to wrap
-        dim: Dimension for LayerNorm
-        eps: Epsilon for LayerNorm
-
-    Examples:
-        >>> # Standard Transformer block
-        >>> block = PreNormResidual(
-        ...     nn.Sequential(
-        ...         nn.MultiheadAttention(embed_dim=256, num_heads=8),
-        ...         nn.Linear(256, 256)
-        ...     ),
-        ...     dim=256
-        ... )
-    """
-
-    def __init__(
-        self,
-        module: nn.Module,
-        dim: int,
-        eps: float = 1e-5,
-    ):
-        super().__init__()
-        self.norm = nn.LayerNorm(dim, eps=eps)
-        self.module = module
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward with pre-normalization residual."""
-        out = self.module(self.norm(x))
-
-        if x.shape != out.shape:
-            raise ValueError(
-                f"Residual shapes don't match: input {x.shape}, output {out.shape}"
-            )
-
-        return x + out
-
-    def __repr__(self) -> str:
-        return f"PreNormResidual(dim={self.norm.normalized_shape[0]})"
-
-
-class ResidualSequence(nn.Module):
-    """
-    Sequence of residual blocks with consistent interface.
-
-    Useful for building deep networks with the same residual pattern.
-
-    Args:
-        blocks: List of modules to wrap
-        residual_type: Type of residual for all blocks
-        **residual_kwargs: Additional arguments for residual blocks
-
-    Examples:
-        >>> processor = ResidualSequence([
-        ...     GraphNetBlock(node_dim=128, edge_dim=128),
-        ...     GraphNetBlock(node_dim=128, edge_dim=128),
-        ...     GraphNetBlock(node_dim=128, edge_dim=128),
-        ... ], residual_type='add')
-    """
-
-    def __init__(
-        self,
-        blocks: list,
-        residual_type: Literal['add', 'scaled', 'none'] = 'add',
-        **residual_kwargs
-    ):
-        super().__init__()
-        self.blocks = nn.ModuleList([
-            ResidualBlock(block, residual_type=residual_type, **residual_kwargs)
-            for block in blocks
-        ])
-
-    def forward(self, x):
-        """Forward through all residual blocks."""
-        for block in self.blocks:
-            x = block(x)
-        return x
-
-    def __len__(self) -> int:
-        return len(self.blocks)
-
-    def __getitem__(self, idx):
-        return self.blocks[idx]
-
-
-class SkipConnection(nn.Module):
-    """
-    Flexible skip connection with optional projection.
-
-    Useful when input and output dimensions differ.
-
-    Args:
-        module: The module to wrap
-        projection: Optional projection layer for matching dimensions
-        aggregation: How to combine ('add', 'concat', 'none')
-
-    Examples:
-        >>> # Dimension change with projection
-        >>> block = SkipConnection(
-        ...     nn.Sequential(nn.Linear(64, 128), nn.ReLU()),
-        ...     projection=nn.Linear(64, 128),
-        ...     aggregation='add'
-        ... )
-    """
-
-    def __init__(
-        self,
-        module: nn.Module,
-        projection: Optional[nn.Module] = None,
-        aggregation: Literal['add', 'concat', 'none'] = 'add',
-    ):
-        super().__init__()
-        self.module = module
-        self.projection = projection
-        self.aggregation = aggregation
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Forward with skip connection."""
-        out = self.module(x)
-
-        if self.aggregation == 'none':
-            return out
-
-        # Project input if needed
-        residual = x if self.projection is None else self.projection(x)
-
-        if self.aggregation == 'add':
-            if residual.shape != out.shape:
-                raise ValueError(
-                    f"Cannot add: residual {residual.shape}, output {out.shape}"
-                )
-            return residual + out
-        elif self.aggregation == 'concat':
-            return torch.cat([residual, out], dim=-1)
-        else:
-            raise ValueError(f"Unknown aggregation: {self.aggregation}")
-
-    def __repr__(self) -> str:
-        return f"SkipConnection(aggregation={self.aggregation})"
-
-
 def make_residual(
     module: nn.Module,
     residual_type: Literal['add', 'scaled', 'gated', 'prenorm', 'none'] = 'add',
@@ -352,25 +162,37 @@ def make_residual(
 
     Args:
         module: Module to wrap
-        residual_type: Type of residual wrapper
-        **kwargs: Additional arguments for specific residual types
+        residual_type: Type of residual wrapper:
+            - 'add': Simple addition (x + f(x))
+            - 'scaled': Scaled addition with optional learnable scale
+            - 'gated': Learnable gated residual
+            - 'prenorm': Pre-normalization residual (Transformer-style)
+            - 'none': No residual (return module as-is)
+        **kwargs: Additional arguments:
+            - For 'scaled': scale (float), learnable_scale (bool)
+            - For 'gated': gate_activation, gate_bias
+            - For 'prenorm': dim (int), eps (float)
 
     Returns:
         Wrapped module with residual connections
 
-    Examples:
+    Example:
         >>> block = make_residual(nn.Linear(64, 64), 'add')
         >>> block = make_residual(nn.Linear(64, 64), 'gated', gate_bias=2.0)
         >>> block = make_residual(attention_module, 'prenorm', dim=256)
     """
     if residual_type == 'add':
-        return ResidualBlock(module, residual_type='add', **kwargs)
+        return Residual(module)
     elif residual_type == 'scaled':
-        return ResidualBlock(module, residual_type='scaled', **kwargs)
+        scale = kwargs.pop('scale', 1.0)
+        learnable_scale = kwargs.pop('learnable_scale', False)
+        return Residual(module, scale=scale, learnable_scale=learnable_scale)
     elif residual_type == 'gated':
         return GatedResidual(module, **kwargs)
     elif residual_type == 'prenorm':
-        return PreNormResidual(module, **kwargs)
+        dim = kwargs.pop('dim')
+        eps = kwargs.pop('eps', 1e-5)
+        return Residual(module, norm=nn.LayerNorm(dim, eps=eps))
     elif residual_type == 'none':
         return module
     else:
@@ -378,14 +200,7 @@ def make_residual(
 
 
 __all__ = [
-    # Primary simple interface (backward compatible)
     'Residual',
-    # Advanced variants
-    'ResidualBlock',
     'GatedResidual',
-    'PreNormResidual',
-    'ResidualSequence',
-    'SkipConnection',
-    # Factory
     'make_residual',
 ]

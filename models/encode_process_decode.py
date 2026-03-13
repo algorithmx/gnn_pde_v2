@@ -70,10 +70,26 @@ class EncodeProcessDecode(BaseModel):
         return output
     
     def get_latent(self, graph: GraphsTuple) -> GraphsTuple:
-        """Get latent representation after encoding."""
+        """
+        Get latent representation after encoding.
+        
+        Args:
+            graph: Input GraphsTuple
+            
+        Returns:
+            GraphsTuple with encoded (latent) features
+        """
         return self.encoder(graph)
     
     def get_processed(self, graph: GraphsTuple) -> GraphsTuple:
-        """Get representation after full processing."""
+        """
+        Get representation after full processing (encoding + processing).
+        
+        Args:
+            graph: Input GraphsTuple
+            
+        Returns:
+            GraphsTuple with processed features
+        """
         latent = self.encoder(graph)
         return self.processor(latent)

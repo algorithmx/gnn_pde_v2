@@ -75,6 +75,9 @@ def points_to_grid(
         
     Returns:
         [1, C, *grid_shape] - Grid values
+        
+    Raises:
+        NotImplementedError: If grid dimension is not 2D
     """
     n_dim = len(grid_shape)
     C = values.shape[1]
@@ -122,6 +125,9 @@ def normalize_positions(
         
     Returns:
         (normalized_positions, stats) where stats contains normalization parameters
+        
+    Raises:
+        ValueError: If method is not 'minmax' or 'standard'
     """
     if method == 'minmax':
         min_val = positions.min(dim=0, keepdim=True)[0]
@@ -147,7 +153,20 @@ def denormalize_positions(
     stats: dict,
     method: str = 'minmax',
 ) -> torch.Tensor:
-    """Denormalize positions."""
+    """
+    Denormalize positions.
+    
+    Args:
+        normalized: [N, n_dim] - Normalized positions
+        stats: Dictionary containing normalization statistics from normalize_positions()
+        method: 'minmax' or 'standard' (must match method used for normalization)
+        
+    Returns:
+        [N, n_dim] - Denormalized positions
+        
+    Raises:
+        ValueError: If method is not 'minmax' or 'standard'
+    """
     if method == 'minmax':
         return normalized * stats['scale'] + stats['min']
     elif method == 'standard':

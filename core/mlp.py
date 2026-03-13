@@ -151,7 +151,7 @@ class MLP(nn.Module):
                     if final_dropout > 0:
                         layers.append(nn.Dropout(final_dropout))
 
-        self.net = nn.Sequential(*layers)
+        self._net = nn.Sequential(*layers)
         self.weight_init = weight_init
         self.bias_init = bias_init
 
@@ -226,5 +226,29 @@ class MLP(nn.Module):
             return module
         raise ValueError(f"Unsupported normalization spec: {spec}")
 
+    @property
+    def layers(self) -> nn.Sequential:
+        """The underlying ``nn.Sequential`` of layers (read-only)."""
+        return self._net
+
+    @property
+    def in_features(self) -> int:
+        """Input dimension inferred from the first Linear layer."""
+        for m in self._net.modules():
+            if isinstance(m, nn.Linear):
+                return m.in_features
+        raise AttributeError("MLP has no Linear layer")
+
+    @property
+    def out_features(self) -> int:
+        """Output dimension inferred from the last Linear layer."""
+        last_linear: Optional[nn.Linear] = None
+        for m in self._net.modules():
+            if isinstance(m, nn.Linear):
+                last_linear = m
+        if last_linear is None:
+            raise AttributeError("MLP has no Linear layer")
+        return last_linear.out_features
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
+        return self._net(x)

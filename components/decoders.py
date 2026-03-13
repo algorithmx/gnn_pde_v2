@@ -12,22 +12,22 @@ from ..core.mlp import MLP
 class MLPDecoder(nn.Module):
     """
     Simple MLP decoder that operates on node features.
-    
+
     Outputs predictions at each node position.
     """
-    
+
     def __init__(
         self,
-        node_dim: int,
+        latent_dim: int,
         out_dim: int,
         hidden_dims: List[int] = [128, 128],
         activation: str = 'gelu',
         dropout: float = 0.0,
     ):
         super().__init__()
-        
+
         self.mlp = MLP(
-            in_dim=node_dim,
+            in_dim=latent_dim,
             out_dim=out_dim,
             hidden_dims=hidden_dims,
             activation=activation,
@@ -58,23 +58,23 @@ class MLPDecoder(nn.Module):
 class IndependentMLPDecoder(nn.Module):
     """
     Decoder with separate MLPs for each output component.
-    
+
     Useful for multi-task settings or when outputs have different scales.
     """
-    
+
     def __init__(
         self,
-        node_dim: int,
+        latent_dim: int,
         out_dims: List[int],
         hidden_dims: List[int] = [128],
         activation: str = 'gelu',
     ):
         super().__init__()
-        
+
         self.out_dims = out_dims
         self.decoders = nn.ModuleList([
             MLP(
-                in_dim=node_dim,
+                in_dim=latent_dim,
                 out_dim=dim,
                 hidden_dims=hidden_dims,
                 activation=activation,

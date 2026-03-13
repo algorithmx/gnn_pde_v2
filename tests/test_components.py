@@ -12,7 +12,7 @@ from dataclasses import replace
 from gnn_pde_v2 import GraphsTuple
 from gnn_pde_v2.core import MLP
 from gnn_pde_v2.components import (
-    make_mlp_encoder, Residual,
+    Residual,
     GraphNetBlock, GraphNetProcessor,
     MLPDecoder, IndependentMLPDecoder,
     ProbeDecoder,
@@ -109,15 +109,6 @@ class TestMLP:
         x = torch.randn(2, 4, 16, 16, device=device)
         out = mlp(x)
         assert out.shape == (2, 6, 16, 16)
-    
-    def test_make_mlp_encoder(self, device):
-        """Test make_mlp_encoder helper."""
-        encoder = make_mlp_encoder(10, 20, hidden_dim=15, num_layers=3).to(device)
-        x = torch.randn(3, 10, device=device)
-        
-        out = encoder(x)
-        
-        assert out.shape == (3, 20)
 
 
 class TestResidual:
@@ -149,116 +140,113 @@ class TestResidual:
 
 class TestGraphNetBlock:
     """Test GraphNetBlock."""
-    
+
     def test_forward(self, device):
         """Test basic forward pass."""
         block = GraphNetBlock(
-            node_dim=16,
-            edge_dim=8,
-            global_dim=None,
+            latent_dim=16,
+            global_latent_dim=None,
         ).to(device)
-        
+
         graph = GraphsTuple(
             nodes=torch.randn(5, 16, device=device),
-            edges=torch.randn(8, 8, device=device),
+            edges=torch.randn(8, 16, device=device),
             receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),
             senders=torch.tensor([0, 1, 2, 3, 0, 1, 2, 3], device=device),
             n_node=torch.tensor([5], device=device),
             n_edge=torch.tensor([8], device=device),
         )
-        
+
         out = block(graph)
-        
+
         assert out.nodes.shape == (5, 16)
-        assert out.edges.shape == (8, 8)
-    
+        assert out.edges.shape == (8, 16)
+
     def test_with_globals(self, device):
         """Test with global features."""
         block = GraphNetBlock(
-            node_dim=16,
-            edge_dim=8,
-            global_dim=4,
+            latent_dim=16,
+            global_latent_dim=4,
         ).to(device)
-        
+
         graph = GraphsTuple(
             nodes=torch.randn(5, 16, device=device),
-            edges=torch.randn(8, 8, device=device),
+            edges=torch.randn(8, 16, device=device),
             receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),
             senders=torch.tensor([0, 1, 2, 3, 0, 1, 2, 3], device=device),
             globals=torch.randn(1, 4, device=device),
             n_node=torch.tensor([5], device=device),
             n_edge=torch.tensor([8], device=device),
         )
-        
+
         out = block(graph)
-        
+
         assert out.nodes.shape == (5, 16)
-        assert out.edges.shape == (8, 8)
+        assert out.edges.shape == (8, 16)
 
 
 class TestGraphNetProcessor:
     """Test GraphNetProcessor."""
-    
+
     def test_forward(self, device):
         """Test basic forward pass."""
         processor = GraphNetProcessor(
-            node_dim=16,
-            edge_dim=8,
+            latent_dim=16,
             n_layers=3,
         ).to(device)
-        
+
         graph = GraphsTuple(
             nodes=torch.randn(5, 16, device=device),
-            edges=torch.randn(8, 8, device=device),
+            edges=torch.randn(8, 16, device=device),
             receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),
             senders=torch.tensor([0, 1, 2, 3, 0, 1, 2, 3], device=device),
             n_node=torch.tensor([5], device=device),
             n_edge=torch.tensor([8], device=device),
         )
-        
+
         out = processor(graph)
-        
+
         assert out.nodes.shape == (5, 16)
-        assert out.edges.shape == (8, 8)
+        assert out.edges.shape == (8, 16)
 
 
 class TestMLPDecoder:
     """Test MLPDecoder."""
-    
+
     def test_forward(self, device):
         """Test basic forward pass."""
         decoder = MLPDecoder(
-            node_dim=16,
+            latent_dim=16,
             out_dim=3,
         ).to(device)
-        
+
         graph = GraphsTuple(
             nodes=torch.randn(5, 16, device=device),
             n_node=torch.tensor([5], device=device),
         )
-        
+
         out = decoder(graph)
-        
+
         assert out.shape == (5, 3)
 
 
 class TestIndependentMLPDecoder:
     """Test IndependentMLPDecoder."""
-    
+
     def test_forward(self, device):
         """Test multi-output forward pass."""
         decoder = IndependentMLPDecoder(
-            node_dim=16,
+            latent_dim=16,
             out_dims=[3, 5, 2],
         ).to(device)
-        
+
         graph = GraphsTuple(
             nodes=torch.randn(5, 16, device=device),
             n_node=torch.tensor([5], device=device),
         )
-        
+
         out = decoder(graph)
-        
+
         assert len(out) == 3
         assert out[0].shape == (5, 3)
         assert out[1].shape == (5, 5)
@@ -267,26 +255,26 @@ class TestIndependentMLPDecoder:
 
 class TestProbeDecoder:
     """Test ProbeDecoder."""
-    
+
     def test_forward(self, device):
         """Test probe-based decoding."""
         decoder = ProbeDecoder(
-            node_dim=16,
+            latent_dim=16,
             edge_dim=8,
             out_dim=3,
             k_nearest=3,
         ).to(device)
-        
+
         # Source graph
         graph = GraphsTuple(
             nodes=torch.randn(10, 16, device=device),
             positions=torch.randn(10, 2, device=device),
             n_node=torch.tensor([10], device=device),
         )
-        
+
         # Query positions
         query_positions = torch.randn(5, 2, device=device)
-        
+
         out = decoder(graph, query_positions)
-        
+
         assert out.shape == (5, 3)
