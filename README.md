@@ -4,7 +4,7 @@ A clean implementation of the Encode-Process-Decode architecture for PDE-GNNs wi
 
 ## Overview
 
-**Total Implementation**: ~11,000 LOC (core + examples + tests) across 63 Python files
+**Intended architecture layering**: core → components → models → convenient
 
 ### Key Features
 
