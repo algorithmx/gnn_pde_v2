@@ -4,8 +4,6 @@ Transformer processor with optional physics tokens.
 Standard multi-head attention or Transolver-style slice-attention-deslice.
 """
 
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
 from typing import Any, Optional
 
 from torch import Tensor
@@ -16,28 +14,16 @@ import math
 
 from ..core.mlp import MLP
 from ..core.graph import GraphsTuple
+from ..core.protocols import Modulation, ConditioningProtocol  # re-exported for backwards compat
 
 
 # =============================================================================
 # Conditioning Protocol
 # =============================================================================
-
-@dataclass
-class Modulation:
-    """Container for transformer modulation parameters."""
-    shift: Tensor | None = None
-    scale: Tensor | None = None
-    gate: Tensor | None = None
-    cross_kv: Tensor | None = None
-
-
-class ConditioningProtocol(nn.Module, ABC):
-    """Abstract base class for conditioning mechanisms."""
-
-    @abstractmethod
-    def forward(self, condition: Any) -> Modulation:
-        """Convert condition to modulation parameters."""
-        ...
+# Modulation and ConditioningProtocol are defined in core/protocols.py and
+# imported above. They are re-exported here so that existing code that does
+# ``from gnn_pde_v2.components.transformer import ConditioningProtocol``
+# continues to work without modification.
 
 
 class ZeroConditioning(ConditioningProtocol):

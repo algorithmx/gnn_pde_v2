@@ -29,6 +29,7 @@ Example:
 """
 
 from .fourier_encoder import FourierFeatureEncoder
+from .encoders import MeshEncoder
 from .layers import (
     Residual,
     GatedResidual,
@@ -39,15 +40,27 @@ from .decoders import MLPDecoder, IndependentMLPDecoder
 from .probe import ProbeDecoder, ProbeMessagePassingLayer
 from .transformer import (
     TransformerBlock, TransformerProcessor, MultiHeadAttention, PhysicsTokenAttention,
-    # Conditioning
+    # Conditioning (defined in core/protocols, re-exported through transformer)
     Modulation, ConditioningProtocol,
     ZeroConditioning, AdaLNConditioning, DualAdaLNConditioning, FiLMConditioning,
 )
 from .spectral import FNOProcessor, SpectralConv, FNOBlock, AFNOBlock
 
+# Structural protocols — also available from gnn_pde_v2.core
+from ..core.protocols import (
+    GraphEncoder,
+    GraphProcessor,
+    Decoder,
+    GraphModel,
+    PositionEncoder,
+    GridProcessor,
+    GridModel,
+)
+
 __all__ = [
     # Encoders
     "FourierFeatureEncoder",
+    "MeshEncoder",
     # Layers (residual connections)
     "Residual",
     "GatedResidual",
@@ -75,4 +88,12 @@ __all__ = [
     "AdaLNConditioning",
     "DualAdaLNConditioning",
     "FiLMConditioning",
+    # Structural protocols
+    "GraphEncoder",
+    "GraphProcessor",
+    "Decoder",
+    "GraphModel",
+    "PositionEncoder",
+    "GridProcessor",
+    "GridModel",
 ]

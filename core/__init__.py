@@ -13,6 +13,17 @@ from .functional import (
 )
 from .mlp import MLP, SinActivation
 from .registry import AutoRegisterModel
+from .protocols import (
+    Modulation,
+    ConditioningProtocol,
+    GraphEncoder,
+    GraphProcessor,
+    Decoder,
+    GraphModel,
+    PositionEncoder,
+    GridProcessor,
+    GridModel,
+)
 
 __all__ = [
     "GraphsTuple",
@@ -29,4 +40,14 @@ __all__ = [
     "MLP",
     "SinActivation",
     "AutoRegisterModel",
+    # Protocols
+    "Modulation",
+    "ConditioningProtocol",
+    "GraphEncoder",
+    "GraphProcessor",
+    "Decoder",
+    "GraphModel",
+    "PositionEncoder",
+    "GridProcessor",
+    "GridModel",
 ]

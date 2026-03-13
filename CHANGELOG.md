@@ -5,6 +5,143 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.0] - 2026-03-13
+
+### Removed
+
+- **Eliminated `convenient/` layer entirely**:
+  - Removed `convenient/config.py` — Pydantic-based configurations deleted
+  - Removed `convenient/__init__.py`
+  - Architecture now simplified to: `core → components → models`
+  - `AutoRegisterModel` remains available from `gnn_pde_v2.core` (already moved in v2.4.0)
+
+### Changed
+
+- **Updated all imports** across 6 example files:
+  - Changed `from gnn_pde_v2.convenient import AutoRegisterModel` 
+  - To `from gnn_pde_v2.core import AutoRegisterModel`
+- **Updated documentation**:
+  - Removed "Convenient API" section from README.md
+  - Updated examples/README.md to reference `core.AutoRegisterModel`
+  - Removed `test_convenient.py` test file
+
+### Migration
+
+```python
+# Before (v2.5.0 and earlier)
+from gnn_pde_v2.convenient import AutoRegisterModel
+
+# After (v2.6.0+)
+from gnn_pde_v2.core import AutoRegisterModel
+```
+
+## [2.5.0] - 2026-03-13
+
+### Added
+
+- **`core/protocols.py` — structural protocol system**:
+  - Seven `runtime_checkable` `typing.Protocol` definitions covering all component
+    boundaries in both the graph-world and grid-world pipelines:
+    - `GraphEncoder`: `(GraphsTuple) → GraphsTuple`
+    - `GraphProcessor`: `(GraphsTuple) → GraphsTuple`
+    - `Decoder`: `(GraphsTuple, Optional[Tensor]) → Tensor`
+    - `GraphModel`: `(GraphsTuple) → Tensor`
+    - `PositionEncoder`: `(Tensor) → Tensor`
+    - `GridProcessor`: `(Tensor) → Tensor`
+    - `GridModel`: `(Tensor) → Tensor`
+  - `Modulation` dataclass and `ConditioningProtocol` ABC relocated here from
+    `components/transformer.py`; re-exported from `transformer.py` for backwards
+    compatibility
+  - All protocols use `@runtime_checkable`, so `isinstance(obj, GraphProcessor)`
+    works at runtime without inheritance
+- **`AutoRegisterModel.unregister(name)` class method**: removes a single entry
+  from the registry; raises `KeyError` with a descriptive message if absent
+- **`AutoRegisterModel.clear_registry(namespace=None)` class method**: clears
+  the entire registry, or only entries within a given namespace prefix
+- **`MLP.in_features` property**: returns the `in_features` of the first
+  `nn.Linear` layer; eliminates the need to index into internal layers
+- **`MLP.out_features` property**: returns the `out_features` of the last
+  `nn.Linear` layer
+- **`MLP.layers` property**: read-only accessor for the underlying
+  `nn.Sequential`, replacing direct `.net` access
+
+### Changed
+
+- **`MLP.net` renamed to `MLP._net`** (**breaking checkpoint change**):
+  - Internal `nn.Sequential` is now private; use `.layers`, `.in_features`,
+    or `.out_features` instead
+  - `state_dict` keys change from `net.N.*` to `_net.N.*`; existing saved
+    checkpoints must be remapped (see migration note below)
+- **`EncodeProcessDecode.__init__` parameters** now typed as
+  `Union[GraphEncoder, nn.Module]`, `Union[GraphProcessor, nn.Module]`, and
+  `Union[Decoder, nn.Module]`, making the expected protocol explicit in the
+  signature
+- **`ProbeDecoder.forward` signature** changed from `query_positions: Tensor`
+  (required positional) to `query_positions: Optional[Tensor] = None` (optional
+  keyword), now matching the `Decoder` protocol; a clear `ValueError` is raised
+  when `None` is passed, preserving the original runtime behaviour
+- **`components/transformer.py`** no longer defines `Modulation` or
+  `ConditioningProtocol`; both are imported from `core.protocols` and re-exported
+  so all existing imports continue to work unchanged
+- **`core/__init__.py`** now exports all seven protocols plus `Modulation` and
+  `ConditioningProtocol`
+- **`components/__init__.py`** now exports all seven protocols, `MeshEncoder`,
+  and updated conditioning symbols
+
+### Fixed
+
+- **Abstraction leak — `MLP.net`**: internal `nn.Sequential` was publicly
+  accessible and used directly in `examples/example_meshgraphnets.py`
+  (`.net[0].in_features`, `.net[-1].out_features`); replaced with
+  `.in_features` / `.out_features` properties
+- **Abstraction leak — registry direct mutation**: `tests/test_convenient.py`
+  called `._registry.clear()` and `del ._registry[key]` directly; updated to
+  use `clear_registry()` and `unregister()` instead
+- **`Decoder` protocol inconsistency**: `ProbeDecoder` required `query_positions`
+  as a mandatory positional argument while `MLPDecoder` and `IndependentMLPDecoder`
+  made it optional, preventing the three decoders from being used
+  interchangeably; all three now satisfy the `Decoder` protocol
+
+### Migration Notes
+
+**`MLP` checkpoint migration** (only relevant if loading saved state dicts):
+```python
+# Remap old keys to new keys
+old_state = torch.load("checkpoint.pt")
+new_state = {k.replace("net.", "_net.", 1): v for k, v in old_state.items()}
+model.load_state_dict(new_state)
+```
+
+**Registry management in tests / custom code:**
+```python
+# Before
+AutoRegisterModel._registry.clear()
+del AutoRegisterModel._registry['my_model']
+
+# After
+AutoRegisterModel.clear_registry()
+AutoRegisterModel.unregister('my_model')
+```
+
+**`ProbeDecoder` call sites** (no change required; signature is backwards compatible):
+```python
+# Still works — query_positions passed as keyword or positional
+output = probe_decoder(graph, query_positions=coords)
+output = probe_decoder(graph, coords)
+
+# Now raises ValueError with a clear message instead of TypeError
+output = probe_decoder(graph)  # ValueError: ProbeDecoder requires query_positions
+```
+
+**Protocol type annotations:**
+```python
+from gnn_pde_v2.core import GraphProcessor, Decoder
+
+def build_pipeline(proc: GraphProcessor, dec: Decoder): ...
+```
+
+---
+
 ## [2.4.0] - 2026-03-13
 
 ### Added
@@ -382,7 +519,9 @@ See [MIGRATION.md](MIGRATION.md) for complete guide.
 
 | Version | Python | PyTorch | Status |
 |---------|--------|---------|--------|
-| 2.3.x | 3.9+ | 2.0+ | Current |
+| 2.5.x | 3.9+ | 2.0+ | Current |
+| 2.4.x | 3.9+ | 2.0+ | Deprecated |
+| 2.3.x | 3.9+ | 2.0+ | Deprecated |
 | 2.2.x | 3.9+ | 2.0+ | Deprecated |
 | 2.1.x | 3.9+ | 2.0+ | Deprecated |
 | 2.0.x | 3.9+ | 2.0+ | Deprecated |

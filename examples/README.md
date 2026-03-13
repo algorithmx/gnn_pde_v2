@@ -334,10 +334,10 @@ class MyModel(BaseModel):
         ...
 ```
 
-If config-based registration is desired, use the optional convenient API:
+If config-based registration is desired, use `AutoRegisterModel` from core:
 
 ```python
-from gnn_pde_v2.convenient import AutoRegisterModel
+from gnn_pde_v2.core import AutoRegisterModel
 
 class MyModel(AutoRegisterModel, name='my_model'):
     def __init__(self, ...):

@@ -73,18 +73,28 @@ class ProbeDecoder(nn.Module):
     def forward(
         self,
         graph: GraphsTuple,
-        query_positions: torch.Tensor,
+        query_positions: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """
         Decode at query positions.
         
         Args:
             graph: Processed source GraphsTuple with node features
-            query_positions: [N_queries, n_dim] - Query point coordinates
+            query_positions: [N_queries, n_dim] - Query point coordinates.
+                Required for ProbeDecoder; raises ``ValueError`` if ``None``.
             
         Returns:
             [N_queries, out_dim] - Output at query positions
+
+        Raises:
+            ValueError: If ``query_positions`` is ``None``.
+            ValueError: If ``graph.nodes`` or ``graph.positions`` is ``None``.
         """
+        if query_positions is None:
+            raise ValueError(
+                "ProbeDecoder requires query_positions to be provided. "
+                "Pass the [N_queries, n_dim] tensor of query coordinates."
+            )
         if graph.nodes is None:
             raise ValueError("Graph must have nodes for ProbeDecoder")
         if graph.positions is None:

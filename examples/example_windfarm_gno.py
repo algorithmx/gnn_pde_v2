@@ -27,7 +27,7 @@ from typing import Optional, Dict, Tuple, List
 
 # Import framework components
 from gnn_pde_v2.core.graph import GraphsTuple
-from gnn_pde_v2.convenient import AutoRegisterModel
+from gnn_pde_v2.core import AutoRegisterModel
 from gnn_pde_v2.components import GraphNetBlock
 from gnn_pde_v2.core import MLP
 

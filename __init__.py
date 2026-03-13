@@ -10,12 +10,6 @@ Usage:
     from gnn_pde_v2.core import MLP, AutoRegisterModel
     from gnn_pde_v2.components import GraphNetBlock, Residual
 
-    # Convenient API (optional, for quick experimentation)
-    from gnn_pde_v2.convenient import ModelConfig
-
-    # Training utilities (in examples)
-    from gnn_pde_v2.examples.training_utils import Model, LossFunction
-
 Version: 2.1.0
 """
 

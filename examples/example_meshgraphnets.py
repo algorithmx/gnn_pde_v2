@@ -28,7 +28,7 @@ from typing import Optional
 # Import framework components
 from dataclasses import replace
 from gnn_pde_v2.core.graph import GraphsTuple
-from gnn_pde_v2.convenient import AutoRegisterModel
+from gnn_pde_v2.core import AutoRegisterModel
 from gnn_pde_v2.core.functional import scatter_sum
 from gnn_pde_v2.core import MLP
 

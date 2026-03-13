@@ -4,11 +4,12 @@ Encode-Process-Decode architecture.
 Core pattern from DeepMind Graph Nets.
 """
 
-from typing import Optional
+from typing import Optional, Union
 import torch
 import torch.nn as nn
 from ..core.graph import GraphsTuple
 from ..core.base import BaseModel
+from ..core.protocols import GraphEncoder, GraphProcessor, Decoder
 
 
 class EncodeProcessDecode(BaseModel):
@@ -26,16 +27,20 @@ class EncodeProcessDecode(BaseModel):
     - Multi-fidelity architectures
     
     Args:
-        encoder: Feature extraction module
-        processor: Message passing/evolution module
-        decoder: Output generation module
+        encoder: Graph encoder satisfying :class:`~gnn_pde_v2.core.GraphEncoder`
+            protocol; maps ``GraphsTuple → GraphsTuple``.
+        processor: Graph processor satisfying
+            :class:`~gnn_pde_v2.core.GraphProcessor` protocol; maps
+            ``GraphsTuple → GraphsTuple``.
+        decoder: Decoder satisfying :class:`~gnn_pde_v2.core.Decoder` protocol;
+            maps ``(GraphsTuple, Optional[Tensor]) → Tensor``.
     """
     
     def __init__(
         self,
-        encoder: nn.Module,
-        processor: nn.Module,
-        decoder: nn.Module,
+        encoder: Union[GraphEncoder, nn.Module],
+        processor: Union[GraphProcessor, nn.Module],
+        decoder: Union[Decoder, nn.Module],
     ):
         super().__init__()
         

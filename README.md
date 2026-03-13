@@ -4,12 +4,12 @@ A clean implementation of the Encode-Process-Decode architecture for PDE-GNNs wi
 
 ## Overview
 
-**Intended architecture layering**: core → components → models → convenient
+**Architecture layering**: core → components → models
 
 ### Key Features
 
 - **Modular EPD Architecture**: Clean separation of Encoder, Processor, Decoder components
-- **Dual API Design**: Lean core API + optional convenient high-level API
+- **Clean API Design**: Lean, composable core API with consistent patterns
 - **Component-Based**: Reusable building blocks (MLP, GraphNetBlock, FNOBlock, etc.)
 - **Pluggable Conditioning**: Protocol-based conditioning system (AdaLN, FiLM, DualAdaLN) for transformers
 - **Research Reproductions**: 7+ paper implementations with exact equivalence
@@ -22,7 +22,7 @@ A clean implementation of the Encode-Process-Decode architecture for PDE-GNNs wi
 The framework provides two usage patterns:
 
 1. **Lean Core API** (recommended for research): Direct component usage
-2. **Convenient API** (optional): Configuration-based with auto-registration
+2. **Model Registry** (optional): Auto-registration for config-driven workflows
 
 ## Architecture
 
@@ -40,13 +40,6 @@ gnn_pde_v2/
 │   ├── fno.py              # FNO components (SpectralConv, etc.)
 │   ├── transformer.py      # Transformer components
 │   └── probe.py            # Probe-based components
-├── convenient/              # High-level API (optional)
-│   ├── registry.py         # Auto-registration base class
-│   ├── config.py           # Pydantic configurations
-│   ├── builder.py          # Configuration-based model building
-│   ├── training.py         # Unified training wrapper
-│   ├── aggregation.py      # Extended aggregation functions
-│   └── initializers.py     # Weight initialization utilities
 ├── models/                  # Complete model implementations
 │   ├── encode_process_decode.py  # Clean EPD model
 │   ├── gnn_model.py             # GNN models (GraphNet, MeshGraphNet)
@@ -65,7 +58,6 @@ gnn_pde_v2/
 └── tests/                   # Comprehensive test suite
     ├── test_core.py        # Core functionality tests
     ├── test_components.py  # Component tests
-    ├── test_convenient.py  # High-level API tests
     └── test_examples.py    # Example reproduction tests
 ```
 
@@ -119,52 +111,6 @@ graph = GraphsTuple(
 model = MyModel()
 output = model(graph)  # [10, 2]
 ```
-
-### Convenient API (Optional)
-
-```python
-from gnn_pde_v2.convenient import GNNConfig, ConfigBuilder, TrainingConfig
-
-# Define config
-config = GNNConfig(
-    model_type='graphnet',
-    node_in_dim=5,
-    edge_in_dim=3,
-    out_dim=2,
-    hidden_dim=128,
-    n_message_passing=4,
-)
-
-# Build and train model
-builder = ConfigBuilder(config)
-model = builder.build_unified_model(TrainingConfig())
-
-# Training step
-metrics = model.train_step((graph, target))
-```
-
-### Convenient API Components
-
-| Component | Description |
-|-----------|-------------|
-| **Registry** | |
-| `AutoRegisterModel` | Base class inheriting from `BaseModel` with auto-registration, `create()`, `list_models()`, `get_model_info()` |
-| **Configuration** | |
-| `ModelConfig` | Pydantic base model configuration |
-| `FNOConfig` | FNO-specific config (width, modes, n_dim, use_afno) |
-| `GNNConfig` | GNN-specific config (message_passing, physics_tokens) |
-| `TrainingConfig` | Training hyperparameters (optimizer, scheduler, loss) |
-| `ExperimentConfig` | Full experiment config combining model + training |
-| **Building & Training** | |
-| `ConfigBuilder` | Configuration-based model building |
-| `Model` | Unified training wrapper with `train_step()`, `predict()`, `evaluate()`, checkpointing |
-| `LossFunction` | Loss function wrapper with string-based selection |
-| **Utilities** | |
-| `get_initializer()` | String-based weight initialization lookup |
-| `initialize_module()` | Initialize all module parameters by name |
-| `scatter_softmax()` | Softmax aggregation for attention |
-| `scatter_min()` | Min aggregation |
-| `segment_*` | Alias API (segment_sum, segment_mean, segment_max, segment_min) |
 
 ## Available Components
 
@@ -321,7 +267,7 @@ pytest gnn_pde_v2/tests/test_examples.py
 
 - **Core**: Graph processing, BaseModel, functional operations
 - **Components**: All encoders, processors, decoders
-- **Convenient**: Configuration, registry, training API
+- **Registry**: Auto-registration for model discovery
 - **Examples**: Research paper reproduction accuracy
 
 ## Installation & Dependencies
@@ -335,7 +281,7 @@ pip install torch numpy
 ### Optional Dependencies
 
 ```bash
-# For convenient API (configuration, training)
+# For config-based experiments (optional)
 pip install pydantic
 
 # For testing
@@ -350,7 +296,7 @@ The framework gracefully handles missing optional dependencies - features are di
 ## Design Principles
 
 1. **Composability**: Small, chainable components that work together
-2. **Dual API**: Lean core for research + convenient API for experimentation  
+2. **Clean API**: Lean, composable API with consistent patterns  
 3. **Component over Framework**: Focus on reusable building blocks
 4. **Reproducibility**: Exact paper implementations with equivalence guarantees
 5. **Graceful Degradation**: Optional dependencies with clear fallbacks
@@ -371,14 +317,19 @@ processor = Residual(GraphNetBlock(128, 128))
 decoder = MLP(in_dim=128, out_dim=2, hidden_dims=[64], use_layer_norm=False)
 ```
 
-### Rapid Experimentation (Convenient API)
+### Model Registry
 
 ```python
-from gnn_pde_v2.convenient import GNNConfig, ConfigBuilder
+from gnn_pde_v2.core import AutoRegisterModel
 
-# Configuration-based model building
-config = GNNConfig(model_type='graphnet', hidden_dim=128)
-model = ConfigBuilder(config).build_unified_model()
+# Register models for config-driven instantiation
+class MyModel(AutoRegisterModel, name='my_model'):
+    def __init__(self, hidden_dim=128):
+        super().__init__()
+        self.net = nn.Linear(hidden_dim, hidden_dim)
+
+# Create by name
+model = AutoRegisterModel.create('my_model', hidden_dim=256)
 ```
 
 ### Paper Reproduction
@@ -391,7 +342,7 @@ model = MeshGraphNets(
     node_input_size=11,
     edge_input_size=3, 
     output_size=3,
-    message_passing_steps=15
+    n_layers=15
 )
 ```
 
