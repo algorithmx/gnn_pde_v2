@@ -6,7 +6,7 @@ from typing import List, Optional
 import torch
 import torch.nn as nn
 from ..core.graph import GraphsTuple
-from .encoders import MLP
+from ..core.mlp import MLP
 
 
 class MLPDecoder(nn.Module):

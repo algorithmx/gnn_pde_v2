@@ -79,7 +79,8 @@ gnn_pde_v2/
 
 ```python
 from gnn_pde_v2 import GraphsTuple
-from gnn_pde_v2.components import MLP, GraphNetProcessor, MLPDecoder
+from gnn_pde_v2.core import MLP
+from gnn_pde_v2.components import GraphNetProcessor, MLPDecoder
 import torch
 
 # Build model from components
@@ -241,7 +242,8 @@ The framework gracefully handles missing optional dependencies - features are di
 
 ```python
 from gnn_pde_v2 import GraphsTuple
-from gnn_pde_v2.components import MLP, GraphNetBlock, Residual
+from gnn_pde_v2.core import MLP
+from gnn_pde_v2.components import GraphNetBlock, Residual
 
 # Direct component composition for maximum flexibility
 encoder = MLP(in_dim=5, out_dim=128, hidden_dims=[128], use_layer_norm=False)

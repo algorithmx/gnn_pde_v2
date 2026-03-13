@@ -14,7 +14,8 @@ from dataclasses import replace
 # Import from convenient (optional high-level API)
 from gnn_pde_v2.convenient import AutoRegisterModel, ModelConfig, ConfigBuilder
 from gnn_pde_v2 import GraphsTuple
-from gnn_pde_v2.components import MLP, GraphNetBlock
+from gnn_pde_v2.core import MLP
+from gnn_pde_v2.components import GraphNetBlock
 
 
 class EasyMeshGraphNets(AutoRegisterModel, name='meshgraphnets_easy'):

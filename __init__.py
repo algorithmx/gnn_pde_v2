@@ -7,8 +7,9 @@ with modular, composable components.
 Usage:
     # Lean core (recommended for research)
     from gnn_pde_v2 import GraphsTuple, BaseModel
-    from gnn_pde_v2.components import MLP, GraphNetBlock, Residual
-    
+    from gnn_pde_v2.core import MLP
+    from gnn_pde_v2.components import GraphNetBlock, Residual
+
     # Convenient API (optional, for quick experimentation)
     from gnn_pde_v2.convenient import (
         AutoRegisterModel, ModelConfig, ConfigBuilder, Model

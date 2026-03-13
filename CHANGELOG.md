@@ -136,9 +136,9 @@ To migrate from v2.0:
    ```python
    # Old
    from gnn_pde_v2.encoders import MLP
-   
-   # New
-   from gnn_pde_v2.components import MLP
+
+   # Current
+   from gnn_pde_v2.core import MLP
    ```
 
 2. For auto-registration:

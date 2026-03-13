@@ -9,6 +9,7 @@ from .functional import (
     aggregate_edges,
     broadcast_nodes_to_edges,
 )
+from .mlp import MLP, SinActivation
 
 __all__ = [
     "GraphsTuple",
@@ -20,4 +21,6 @@ __all__ = [
     "scatter_max",
     "aggregate_edges",
     "broadcast_nodes_to_edges",
+    "MLP",
+    "SinActivation",
 ]

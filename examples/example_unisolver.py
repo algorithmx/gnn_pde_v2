@@ -27,7 +27,7 @@ from typing import Optional, Tuple
 
 # Import framework components
 from gnn_pde_v2.convenient import AutoRegisterModel
-from gnn_pde_v2.components import MLP
+from gnn_pde_v2.core import MLP
 
 
 def modulate(x, shift, scale):

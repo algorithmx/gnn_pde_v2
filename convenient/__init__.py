@@ -9,16 +9,17 @@ This module provides optional sugar for quick experimentation:
 
 For lean usage, import directly from core and components:
     from gnn_pde_v2 import GraphsTuple, BaseModel
-    from gnn_pde_v2.components import MLP, GraphNetBlock
+    from gnn_pde_v2.core import MLP
+    from gnn_pde_v2.components import GraphNetBlock
 
 Example with convenient API:
     from gnn_pde_v2.convenient import (
         AutoRegisterModel, ModelConfig, ConfigBuilder, Model
     )
-    
+
     class MyModel(AutoRegisterModel, name='my_model'):
         ...
-    
+
     config = ModelConfig(model_type='my_model', hidden_dim=128)
     model = ConfigBuilder(config).build_model()
 """

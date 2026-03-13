@@ -11,7 +11,8 @@ from dataclasses import replace
 
 # Import only what we need from core and components
 from gnn_pde_v2 import GraphsTuple
-from gnn_pde_v2.components import MLP, GraphNetBlock
+from gnn_pde_v2.core import MLP
+from gnn_pde_v2.components import GraphNetBlock
 
 
 class MinimalMeshGraphNets(nn.Module):

@@ -28,7 +28,7 @@ from typing import Optional, Tuple
 # Import framework components
 from gnn_pde_v2.core.graph import GraphsTuple
 from gnn_pde_v2.convenient import AutoRegisterModel
-from gnn_pde_v2.components import MLP
+from gnn_pde_v2.core import MLP
 
 
 class GraphPDE_GNO(AutoRegisterModel, name='graph_pde_gno'):

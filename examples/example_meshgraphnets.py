@@ -30,41 +30,29 @@ from dataclasses import replace
 from gnn_pde_v2.core.graph import GraphsTuple
 from gnn_pde_v2.convenient import AutoRegisterModel
 from gnn_pde_v2.core.functional import scatter_sum
+from gnn_pde_v2.core import MLP
 
 
-class MeshGraphNetsMLP(nn.Module):
-    """MeshGraphNets-faithful MLP.
+def make_meshgraphnets_mlp(
+    in_dim: int,
+    hidden_dim: int,
+    out_dim: int,
+    layer_norm_out: bool = True,
+) -> MLP:
+    """Create MeshGraphNets-faithful MLP using framework MLP.
 
     Original `build_mlp` (meshgraphnets_pytorch/model/model.py):
-    - 4 Linear layers
+    - 4 Linear layers (3 hidden of same size)
     - ReLU after first 3
     - optional terminal LayerNorm
     """
-
-    def __init__(
-        self,
-        in_dim: int,
-        hidden_dim: int,
-        out_dim: int,
-        layer_norm_out: bool = True,
-    ):
-        super().__init__()
-
-        layers: list[nn.Module] = [
-            nn.Linear(in_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, out_dim),
-        ]
-        if layer_norm_out:
-            layers.append(nn.LayerNorm(out_dim))
-        self.net = nn.Sequential(*layers)
-
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
+    return MLP(
+        in_dim=in_dim,
+        out_dim=out_dim,
+        hidden_dims=[hidden_dim, hidden_dim, hidden_dim],
+        activation='relu',
+        norms=[None, None, None, 'layer' if layer_norm_out else None],
+    )
 
 
 class MeshGraphNetsGNBlock(nn.Module):
@@ -79,13 +67,13 @@ class MeshGraphNetsGNBlock(nn.Module):
 
     def __init__(self, hidden_size: int):
         super().__init__()
-        self.edge_mlp = MeshGraphNetsMLP(
+        self.edge_mlp = make_meshgraphnets_mlp(
             in_dim=3 * hidden_size,
             hidden_dim=hidden_size,
             out_dim=hidden_size,
             layer_norm_out=True,
         )
-        self.node_mlp = MeshGraphNetsMLP(
+        self.node_mlp = make_meshgraphnets_mlp(
             in_dim=2 * hidden_size,
             hidden_dim=hidden_size,
             out_dim=hidden_size,
@@ -141,13 +129,13 @@ class MeshGraphNets(AutoRegisterModel, name='meshgraphnets'):
         self.message_passing_steps = message_passing_steps
         
         # Encoder: faithful 4-linear MLP with terminal LayerNorm
-        self.node_encoder = MeshGraphNetsMLP(
+        self.node_encoder = make_meshgraphnets_mlp(
             in_dim=node_input_size,
             hidden_dim=hidden_size,
             out_dim=hidden_size,
             layer_norm_out=True,
         )
-        self.edge_encoder = MeshGraphNetsMLP(
+        self.edge_encoder = make_meshgraphnets_mlp(
             in_dim=edge_input_size,
             hidden_dim=hidden_size,
             out_dim=hidden_size,
@@ -161,7 +149,7 @@ class MeshGraphNets(AutoRegisterModel, name='meshgraphnets'):
         ])
 
         # Decoder: faithful 4-linear MLP WITHOUT terminal LayerNorm
-        self.decoder = MeshGraphNetsMLP(
+        self.decoder = make_meshgraphnets_mlp(
             in_dim=hidden_size,
             hidden_dim=hidden_size,
             out_dim=output_size,

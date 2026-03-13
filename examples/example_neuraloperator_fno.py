@@ -26,7 +26,8 @@ from typing import Tuple, List, Union
 
 # Import framework components
 from gnn_pde_v2.convenient import AutoRegisterModel
-from gnn_pde_v2.components import FNOProcessor, SpectralConv, MLP
+from gnn_pde_v2.components import FNOProcessor, SpectralConv
+from gnn_pde_v2.core import MLP
 
 
 class NeuralOperatorFNO(AutoRegisterModel, name='neuraloperator_fno'):

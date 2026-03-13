@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 from ..core.graph import GraphsTuple
 from ..core.functional import scatter_sum
-from .encoders import MLP
+from ..core.mlp import MLP
 
 
 class GraphNetBlock(nn.Module):

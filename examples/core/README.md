@@ -14,7 +14,7 @@ These examples demonstrate the **lean core** usage of the GNN-PDE framework.
 
 Minimal MeshGraphNets implementation using:
 - `gnn_pde_v2.GraphsTuple` - Graph data structure
-- `gnn_pde_v2.components.MLP` - Building block
+- `gnn_pde_v2.core.MLP` - Building block
 - `gnn_pde_v2.components.GraphNetBlock` - Processor
 - `gnn_pde_v2.components.Residual` - Skip connection
 
@@ -22,13 +22,14 @@ Minimal MeshGraphNets implementation using:
 
 ```python
 from gnn_pde_v2 import GraphsTuple
-from gnn_pde_v2.components import MLP, GraphNetBlock
+from gnn_pde_v2.core import MLP
+from gnn_pde_v2.components import GraphNetBlock
 
 class MyModel(nn.Module):
     def __init__(self):
         self.encoder = MLP(10, 128, [128])
         self.processor = GraphNetBlock(128, 128)
-    
+
     def forward(self, graph: GraphsTuple):
         nodes = self.encoder(graph.nodes)
         processed = self.processor(GraphsTuple(nodes=nodes, ...))

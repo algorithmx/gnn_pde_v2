@@ -8,7 +8,7 @@ from typing import Optional, Callable
 import torch
 import torch.nn as nn
 from ..core.graph import GraphsTuple, batch_graphs
-from .encoders import MLP
+from ..core.mlp import MLP
 
 
 class ProbeDecoder(nn.Module):
