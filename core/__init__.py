@@ -12,7 +12,7 @@ from .functional import (
     broadcast_nodes_to_edges,
 )
 from .mlp import MLP, SinActivation
-from .registry import AutoRegisterModel
+from .registry import AutoRegisterModel, MODEL_REGISTRY
 from .protocols import (
     Modulation,
     ConditioningProtocol,
@@ -40,6 +40,7 @@ __all__ = [
     "MLP",
     "SinActivation",
     "AutoRegisterModel",
+    "MODEL_REGISTRY",
     # Protocols
     "Modulation",
     "ConditioningProtocol",

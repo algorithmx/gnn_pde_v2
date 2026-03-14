@@ -5,6 +5,46 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.2] - 2026-03-14
+
+### Added
+
+- **`core/registry.py` — `ModelRegistry` standalone class**:
+  - Extracted registry state and management API into a standalone `ModelRegistry`
+    object, independent of any model base class.
+  - `MODEL_REGISTRY` module-level singleton is now the single source of truth;
+    exported from `gnn_pde_v2.core`.
+  - `ModelRegistry.register(name, namespace=, aliases=)` decorator registers any
+    `nn.Module` subclass without requiring inheritance from `AutoRegisterModel`.
+  - `ModelRegistry.add(cls, name, ...)` for imperative registration.
+  - Container protocol: `name in registry`, `registry[name]`, `len(registry)`,
+    `repr(registry)`.
+  - `aliases=` parameter on both `ModelRegistry.add` / `.register` and
+    `AutoRegisterModel.__init_subclass__` — multiple names map to the same class.
+
+- **Built-in aliases** registered for all framework models:
+  - `GraphNet`: `gnn`, `graph_net`
+  - `MeshGraphNet`: `mgn`, `mesh_graph_net`
+  - `FNO`: `fourier_no`, `fno2d`
+  - `TFNO`: `tensorized_fno`
+  - `AFNO`: `adaptive_fno`
+
+### Changed
+
+- **`AutoRegisterModel` now warns when `name=` is omitted** in a subclass
+  definition; defaulting to the lowercased class name silently was a source of
+  accidental public-API leakage.
+- **`AutoRegisterModel` classmethods** (`create`, `list_models`, `get_model_info`,
+  `unregister`, `clear_registry`) delegate to `MODEL_REGISTRY`; `_registry` is the
+  same dict object for full backwards compatibility.
+
+### Fixed
+
+- **`models/__init__.py` lazy-import** (`__getattr__`): replaced `__import__` with
+  `importlib.import_module` — the previous `__import__('.fno_model', level=1)`
+  call produced a trailing-dot module name (`gnn_pde_v2.models.`) that silently
+  failed for direct `from gnn_pde_v2.models import FNO` calls.
+
 ## [2.6.1] - 2026-03-14
 
 ### Changed
