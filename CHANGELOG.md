@@ -5,6 +5,30 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.1] - 2026-03-14
+
+### Changed
+
+- **`components/probe.py` — `ProbeDecoder` refactor and batch support**:
+  - **Batch processing**: `forward` now accepts a batched `GraphsTuple` (output of
+    `batch_graphs`) plus an optional `n_query: Tensor[B]` describing per-graph query
+    counts; defaults to single-graph behaviour when `n_query` is `None`.
+  - **`_construct_probe_graph`**: contract narrowed to single-graph; `forward` loops
+    over `B` graphs only for `cdist`/`topk` k-NN (inherently local); all subsequent
+    MLP and scatter ops run on the packed `batch_graphs` result.
+  - **`_encode_edge_features`** new method: extracts the `rbf`/`pos-diff` branching
+    from `_construct_probe_graph`; fixed RBF bug where
+    `nearest_distances.reshape(-1,1).expand(-1, k)` repeated a single scalar per edge
+    — replaced with `repeat_interleave(k, dim=0)` to broadcast each query's full
+    k-distance row.
+  - **`_segment_bounds`** new static utility: returns `(starts, ends)` tensors via
+    `cumsum`; replaces the old `_packed_slices` generator; no Python loop.
+  - **`_extract_probe_nodes`** fully vectorised: replaced `B`-iteration list
+    comprehension with a single `all_nodes[base + local_offsets]` gather using the
+    cumshift trick (`arange(total_q) - seg_starts.repeat_interleave(n_query)`).
+  - **Scatter consistency**: replaced all `index_add_` calls with `scatter_sum` /
+    `scatter_mean` from `core.functional`.
+
 ## [2.6.0] - 2026-03-13
 
 ### Added
