@@ -5,6 +5,26 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.3] - 2026-03-14
+
+### Changed
+
+- **`core/protocols.py` — `ConditioningProtocol` is now generic over its
+  condition type** (`ConditioningProtocol[CondT]`):
+  - Added `CondT = TypeVar("CondT")` exported from `core.protocols`.
+  - `forward(self, condition: CondT) -> Modulation` replaces the uncontracted
+    `condition: Any` signature; static analysers now enforce the correct
+    condition type at every call site.
+- **`components/transformer.py` — concrete conditioners bind `CondT`**:
+  - `ZeroConditioning(ConditioningProtocol[object])` — accepts any value / `None`.
+  - `AdaLNConditioning(ConditioningProtocol[Tensor])` — requires `Tensor[..., cond_dim]`.
+  - `DualAdaLNConditioning(ConditioningProtocol[Tensor])` — requires
+    `Tensor[..., mu_dim + f_dim]`; adds a runtime shape guard that raises
+    `ValueError` when the last dimension does not match.
+  - `FiLMConditioning(ConditioningProtocol[Tensor])` — requires `Tensor[..., cond_dim]`.
+
+---
+
 ## [2.6.2] - 2026-03-14
 
 ### Added

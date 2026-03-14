@@ -23,13 +23,20 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from typing import Any, Optional, Protocol, runtime_checkable
+from typing import Any, Generic, Optional, Protocol, TypeVar, runtime_checkable
 
 import torch
 import torch.nn as nn
 from torch import Tensor
 
 from .graph import GraphsTuple
+
+#: Type variable for the condition input accepted by a :class:`ConditioningProtocol`.
+#: Bind it to a concrete type when subclassing::
+#:
+#:     class MyConditioner(ConditioningProtocol[Tensor]):
+#:         def forward(self, condition: Tensor) -> Modulation: ...
+CondT = TypeVar("CondT")
 
 
 # ---------------------------------------------------------------------------
@@ -56,16 +63,27 @@ class Modulation:
     cross_kv: Tensor | None = None
 
 
-class ConditioningProtocol(nn.Module, ABC):
+class ConditioningProtocol(nn.Module, ABC, Generic[CondT]):
     """Abstract base class for conditioning mechanisms.
 
-    All conditioning modules should inherit from this class and implement
-    :meth:`forward`, which maps an arbitrary condition (scalar, tensor,
-    or embedding) to a :class:`Modulation`.
+    This class is *generic* over ``CondT``, the type of the condition
+    accepted by :meth:`forward`.  Subclasses should bind ``CondT`` to a
+    concrete type so that callers can tell at a glance what they must
+    provide::
+
+        # Accepts any optional input — no condition is required.
+        class ZeroConditioning(ConditioningProtocol[object]): ...
+
+        # Requires a floating-point tensor of shape [..., cond_dim].
+        class AdaLNConditioning(ConditioningProtocol[Tensor]): ...
+
+    Using the wrong condition type for a given implementation will be
+    caught by static analysis (mypy / pyright) rather than producing a
+    silent runtime error.
 
     Example::
 
-        class MyConditioning(ConditioningProtocol):
+        class MyConditioning(ConditioningProtocol[Tensor]):
             def __init__(self, cond_dim: int, out_dim: int):
                 super().__init__()
                 self.proj = nn.Linear(cond_dim, out_dim * 2)
@@ -76,14 +94,15 @@ class ConditioningProtocol(nn.Module, ABC):
     """
 
     @abstractmethod
-    def forward(self, condition: Any) -> Modulation:
+    def forward(self, condition: CondT) -> Modulation:  # type: ignore[override]
         """Convert condition to modulation parameters.
 
         Args:
-            condition: Conditioning input (type depends on implementation)
+            condition: Conditioning input of type ``CondT`` (declared by
+                the concrete subclass).
 
         Returns:
-            Modulation with optional shift/scale/gate/cross_kv fields
+            Modulation with optional shift/scale/gate/cross_kv fields.
         """
         ...
 
@@ -98,14 +117,6 @@ class GraphEncoder(Protocol):
 
     Satisfied by any module whose ``forward`` maps
     ``GraphsTuple → GraphsTuple``.
-
-    Example::
-
-        from gnn_pde_v2.core.protocols import GraphEncoder
-        from gnn_pde_v2.components import MeshEncoder
-
-        enc: GraphEncoder = MeshEncoder(node_in_dim=11, edge_in_dim=3,
-                                        global_in_dim=None, latent_dim=128)
     """
 
     def forward(self, graph: GraphsTuple) -> GraphsTuple: ...

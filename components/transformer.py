@@ -4,7 +4,7 @@ Transformer processor with optional physics tokens.
 Standard multi-head attention or Transolver-style slice-attention-deslice.
 """
 
-from typing import Any, Optional
+from typing import Any, Optional, Union
 
 from torch import Tensor
 
@@ -26,15 +26,23 @@ from ..core.protocols import Modulation, ConditioningProtocol  # re-exported for
 # continues to work without modification.
 
 
-class ZeroConditioning(ConditioningProtocol):
-    """Identity conditioning - no modulation applied."""
+class ZeroConditioning(ConditioningProtocol[object]):
+    """Identity conditioning — no modulation applied.
 
-    def forward(self, condition: Any = None) -> Modulation:
+    Accepts (and ignores) any condition value, including ``None``.
+    Suitable as a drop-in for any slot typed as
+    ``ConditioningProtocol[T]`` for any ``T``.
+    """
+
+    def forward(self, condition: object = None) -> Modulation:  # type: ignore[override]
         return Modulation()
 
 
-class AdaLNConditioning(ConditioningProtocol):
-    """Single-source AdaLN conditioning."""
+class AdaLNConditioning(ConditioningProtocol[Tensor]):
+    """Single-source AdaLN conditioning.
+
+    Condition type: ``Tensor`` of shape ``[..., cond_dim]``.
+    """
 
     def __init__(self, cond_dim: int, out_dim: int):
         super().__init__()
@@ -58,8 +66,15 @@ class AdaLNConditioning(ConditioningProtocol):
         )
 
 
-class DualAdaLNConditioning(ConditioningProtocol):
-    """Dual-source AdaLN conditioning (Unisolver-style: μ + f)."""
+class DualAdaLNConditioning(ConditioningProtocol[Tensor]):
+    """Dual-source AdaLN conditioning (Unisolver-style: μ + f).
+
+    Condition type: ``Tensor`` of shape ``[..., mu_dim + f_dim]``.
+    The last dimension is split as ``condition[..., :mu_dim]`` (mean
+    statistics μ) and ``condition[..., mu_dim:]`` (local field features
+    f).  A ``ValueError`` will be raised at runtime if the last
+    dimension does not equal ``mu_dim + f_dim``.
+    """
 
     def __init__(
         self,
@@ -85,6 +100,12 @@ class DualAdaLNConditioning(ConditioningProtocol):
             nn.init.zeros_(proj[1].bias)
 
     def forward(self, condition: Tensor) -> Modulation:
+        expected = self.mu_dim + self.f_dim
+        if condition.shape[-1] != expected:
+            raise ValueError(
+                f"{type(self).__name__}.forward expects condition.shape[-1] == "
+                f"mu_dim + f_dim == {expected}, got {condition.shape[-1]}."
+            )
         mu = condition[..., : self.mu_dim]
         f = condition[..., self.mu_dim :]
 
@@ -98,8 +119,11 @@ class DualAdaLNConditioning(ConditioningProtocol):
         )
 
 
-class FiLMConditioning(ConditioningProtocol):
-    """FiLM-style conditioning (feature-wise linear modulation)."""
+class FiLMConditioning(ConditioningProtocol[Tensor]):
+    """FiLM-style conditioning (feature-wise linear modulation).
+
+    Condition type: ``Tensor`` of shape ``[..., cond_dim]``.
+    """
 
     def __init__(self, cond_dim: int, out_dim: int):
         super().__init__()
