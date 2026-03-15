@@ -277,11 +277,10 @@ class TurbineGNN(nn.Module):
         self.num_iterations = num_iterations
         
         # Stack of GN blocks using framework components
+        # node_dim == edge_dim == n_hidden in this model (all encoded to the same latent dim)
         self.blocks = nn.ModuleList([
             GraphNetBlock(
-                node_dim=node_dim,
-                edge_dim=edge_dim,
-                global_dim=None,
+                latent_dim=node_dim,
                 hidden_dim=n_hidden,
                 activation='relu',
             )
