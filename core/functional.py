@@ -5,156 +5,101 @@ These are thin wrappers that use torch_scatter if available,
 otherwise fall back to pure PyTorch implementations.
 """
 
-from typing import Optional, Tuple
+import functools
+from typing import Literal, Optional, Tuple
 import torch
 from torch import Tensor
 
+# Sentinel used to initialise output buffers for reduction ops.
+_REDUCE_INIT = {
+    'sum':  (0.0,      'scatter_add_',             None),
+    'mean': (0.0,      'scatter_add_',             None),   # post-step: divide by count
+    'max':  (float('-inf'), 'scatter_reduce_',     'amax'),
+    'min':  (float('inf'),  'scatter_reduce_',     'amin'),
+}
 
-def scatter_sum(src: Tensor, index: Tensor, dim: int = 0, dim_size: Optional[int] = None) -> Tensor:
+
+def scatter(
+    src: Tensor,
+    index: Tensor,
+    dim: int = 0,
+    dim_size: Optional[int] = None,
+    reduce: Literal['sum', 'mean', 'max', 'min'] = 'sum',
+) -> Tensor:
     """
-    Sum aggregation (scatter_add).
-    
-    Uses torch_scatter if available, otherwise pure PyTorch.
-    
+    General scatter aggregation.
+
+    Uses ``torch_scatter`` if available (fastest), otherwise falls back to
+    pure PyTorch ops.  All four reductions share a single code path, so
+    there is no duplication and the ``torch_scatter`` fast path is tried
+    exactly once per call.
+
     Args:
-        src: Source features [E, *feat_dims]
-        index: Index tensor with destination indices [E]
+        src: Source features ``[E, *feat_dims]``
+        index: Destination indices ``[E]``
         dim: Dimension to scatter along (default: 0)
-        dim_size: Output size (number of destinations)
-        
+        dim_size: Output size along ``dim``; inferred from ``index`` if omitted
+        reduce: One of ``'sum'``, ``'mean'``, ``'max'``, ``'min'``
+
     Returns:
-        Aggregated features [dim_size, *feat_dims]
+        Aggregated tensor ``[dim_size, *feat_dims]``
     """
     if dim_size is None:
         dim_size = int(index.max()) + 1
-    
-    # Try torch_scatter first (faster)
+
+    # ── fast path ────────────────────────────────────────────────────────────
     try:
-        from torch_scatter import scatter
-        return scatter(src, index, dim=dim, dim_size=dim_size, reduce='sum')
+        from torch_scatter import scatter as _scatter
+        return _scatter(src, index, dim=dim, dim_size=dim_size, reduce=reduce)
     except ImportError:
         pass
-    
-    # Fallback to pure PyTorch
+
+    # ── pure-PyTorch fallback ─────────────────────────────────────────────────
+    init_val, op, reduce_str = _REDUCE_INIT[reduce]
     shape = list(src.shape)
     shape[dim] = dim_size
-    out = torch.zeros(shape, dtype=src.dtype, device=src.device)
-    
-    # Expand index for broadcasting
+
     index_shape = [1] * src.dim()
     index_shape[dim] = -1
     index_expanded = index.view(index_shape).expand_as(src)
-    
-    out.scatter_add_(dim, index_expanded, src)
+
+    if op == 'scatter_add_':
+        out = torch.full(shape, init_val, dtype=src.dtype, device=src.device)
+        out.scatter_add_(dim, index_expanded, src)
+        if reduce == 'mean':
+            ones = torch.ones(index.shape[0], dtype=src.dtype, device=src.device)
+            count_shape = [1] * out.dim()
+            count_shape[dim] = dim_size
+            count = torch.zeros(dim_size, dtype=src.dtype, device=src.device)
+            count.scatter_add_(0, index, ones)
+            out = out / count.view(count_shape).clamp(min=1)
+    else:  # scatter_reduce_ (max / min)
+        out = torch.full(shape, init_val, dtype=src.dtype, device=src.device)
+        out.scatter_reduce_(dim, index_expanded, src, reduce=reduce_str)
+
     return out
+
+
+# ── Named aliases (zero overhead: functools.partial is resolved at import) ────
+
+def scatter_sum(src: Tensor, index: Tensor, dim: int = 0, dim_size: Optional[int] = None) -> Tensor:
+    """Sum aggregation. See :func:`scatter`."""
+    return scatter(src, index, dim=dim, dim_size=dim_size, reduce='sum')
 
 
 def scatter_mean(src: Tensor, index: Tensor, dim: int = 0, dim_size: Optional[int] = None) -> Tensor:
-    """
-    Mean aggregation.
-    
-    Args:
-        src: Source features [E, *feat_dims]
-        index: Index tensor [E]
-        dim: Dimension to scatter along
-        dim_size: Output size
-        
-    Returns:
-        Mean-aggregated features
-    """
-    if dim_size is None:
-        dim_size = int(index.max()) + 1
-    
-    # Try torch_scatter first
-    try:
-        from torch_scatter import scatter
-        return scatter(src, index, dim=dim, dim_size=dim_size, reduce='mean')
-    except ImportError:
-        pass
-    
-    # Fallback
-    out = scatter_sum(src, index, dim, dim_size)
-    
-    # Count items per destination
-    ones = torch.ones(index.shape[0], dtype=src.dtype, device=src.device)
-    count = scatter_sum(ones, index, 0, dim_size)
-    
-    # Reshape for broadcasting
-    count_shape = [1] * out.dim()
-    count_shape[dim] = dim_size
-    count = count.view(count_shape)
-    
-    return out / count.clamp(min=1)
+    """Mean aggregation. See :func:`scatter`."""
+    return scatter(src, index, dim=dim, dim_size=dim_size, reduce='mean')
 
 
 def scatter_max(src: Tensor, index: Tensor, dim: int = 0, dim_size: Optional[int] = None) -> Tensor:
-    """
-    Max aggregation.
-
-    Args:
-        src: Source features [E, *feat_dims]
-        index: Index tensor [E]
-        dim: Dimension to scatter along
-        dim_size: Output size
-
-    Returns:
-        Max-aggregated features
-    """
-    if dim_size is None:
-        dim_size = int(index.max()) + 1
-
-    # Try torch_scatter first
-    try:
-        from torch_scatter import scatter
-        return scatter(src, index, dim=dim, dim_size=dim_size, reduce='max')
-    except ImportError:
-        pass
-
-    # Fallback
-    shape = list(src.shape)
-    shape[dim] = dim_size
-    out = torch.full(shape, float('-inf'), dtype=src.dtype, device=src.device)
-
-    index_shape = [1] * src.dim()
-    index_shape[dim] = -1
-    index_expanded = index.view(index_shape).expand_as(src)
-
-    out.scatter_reduce_(dim, index_expanded, src, reduce='amax')
-    return out
+    """Max aggregation. See :func:`scatter`."""
+    return scatter(src, index, dim=dim, dim_size=dim_size, reduce='max')
 
 
 def scatter_min(src: Tensor, index: Tensor, dim: int = 0, dim_size: Optional[int] = None) -> Tensor:
-    """
-    Min aggregation.
-
-    Args:
-        src: Source features [E, *feat_dims]
-        index: Index tensor [E]
-        dim: Dimension to scatter along
-        dim_size: Output size
-
-    Returns:
-        Min-aggregated features
-    """
-    if dim_size is None:
-        dim_size = int(index.max()) + 1
-
-    try:
-        from torch_scatter import scatter
-        return scatter(src, index, dim=dim, dim_size=dim_size, reduce='min')
-    except ImportError:
-        pass
-
-    shape = list(src.shape)
-    shape[dim] = dim_size
-    out = torch.full(shape, float('inf'), dtype=src.dtype, device=src.device)
-
-    index_shape = [1] * src.dim()
-    index_shape[dim] = -1
-    index_expanded = index.view(index_shape).expand_as(src)
-
-    out.scatter_reduce_(dim, index_expanded, src, reduce='amin')
-    return out
+    """Min aggregation. See :func:`scatter`."""
+    return scatter(src, index, dim=dim, dim_size=dim_size, reduce='min')
 
 
 def scatter_softmax(src: Tensor, index: Tensor, dim: int = 0, dim_size: Optional[int] = None) -> Tensor:
@@ -219,25 +164,92 @@ def aggregate_edges(
     edge_features: Tensor,
     receivers: Tensor,
     num_nodes: int,
-    method: str = 'sum',
+    method: Literal['sum', 'mean', 'max', 'min'] = 'sum',
 ) -> Tensor:
     """
     Aggregate edge features to receiver nodes.
-    
+
+    Semantic convenience wrapper around :func:`scatter` with ``dim=0``.
+
     Args:
         edge_features: [E, feat_dim] - Edge features
         receivers: [E] - Receiver node indices
         num_nodes: Number of nodes
-        method: Aggregation method ('sum', 'mean', 'max')
-        
+        method: Aggregation method — ``'sum'``, ``'mean'``, ``'max'``, ``'min'``
+
     Returns:
         [num_nodes, feat_dim] - Aggregated node features
     """
-    if method == 'sum':
-        return scatter_sum(edge_features, receivers, dim=0, dim_size=num_nodes)
-    elif method == 'mean':
-        return scatter_mean(edge_features, receivers, dim=0, dim_size=num_nodes)
-    elif method == 'max':
-        return scatter_max(edge_features, receivers, dim=0, dim_size=num_nodes)
-    else:
-        raise ValueError(f"Unknown aggregation method: {method}")
+    return scatter(edge_features, receivers, dim=0, dim_size=num_nodes, reduce=method)
+
+
+def broadcast_global(globals_: Tensor, counts: Tensor) -> Tensor:
+    """
+    Broadcast per-graph global features to every node or edge.
+
+    Args:
+        globals_: [B, global_dim] - One global vector per graph in the batch
+        counts: [B] - Number of nodes (or edges) per graph
+
+    Returns:
+        [total, global_dim] - Global features repeated for each node/edge
+    """
+    return torch.repeat_interleave(globals_, counts, dim=0)
+
+
+def aggregate_to_global(
+    features: Tensor,
+    counts: Tensor,
+    method: Literal['sum', 'mean', 'max', 'min'] = 'mean',
+) -> Tensor:
+    """
+    Pool per-node or per-edge features back to graph-level globals.
+
+    Args:
+        features: [total, feat_dim] - Node or edge features (flat batch)
+        counts: [B] - Number of nodes (or edges) per graph
+        method: Aggregation method — ``'sum'``, ``'mean'``, ``'max'``, ``'min'``
+
+    Returns:
+        [B, feat_dim] - One aggregated vector per graph
+    """
+    batch_index = torch.repeat_interleave(
+        torch.arange(len(counts), device=features.device), counts
+    )
+    return scatter(features, batch_index, dim=0, dim_size=len(counts), reduce=method)
+
+
+def broadcast_global(globals_: Tensor, counts: Tensor) -> Tensor:
+    """
+    Broadcast per-graph global features to every node or edge in the batch.
+
+    Args:
+        globals_: [batch_size, global_feat_dim] - One vector per graph
+        counts: [batch_size] - Number of nodes (or edges) per graph
+
+    Returns:
+        [total, global_feat_dim] - Global features repeated for each item
+    """
+    return torch.repeat_interleave(globals_, counts, dim=0)
+
+
+def aggregate_to_global(
+    features: Tensor,
+    counts: Tensor,
+    method: Literal['sum', 'mean', 'max', 'min'] = 'mean',
+) -> Tensor:
+    """
+    Pool node or edge features back to graph-level globals.
+
+    Args:
+        features: [total, feat_dim] - Per-node or per-edge features
+        counts: [batch_size] - Number of items per graph
+        method: Pooling method — ``'sum'``, ``'mean'``, ``'max'``, ``'min'``
+
+    Returns:
+        [batch_size, feat_dim] - Pooled features per graph
+    """
+    batch_index = torch.repeat_interleave(
+        torch.arange(len(counts), device=features.device), counts
+    )
+    return scatter(features, batch_index, dim=0, dim_size=len(counts), reduce=method)

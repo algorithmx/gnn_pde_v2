@@ -14,6 +14,7 @@ from gnn_pde_v2.core import MLP
 from gnn_pde_v2.components import (
     Residual,
     GraphNetBlock, GraphNetProcessor,
+    GlobalGraphNetBlock, GlobalGraphNetProcessor,
     MLPDecoder, IndependentMLPDecoder,
     ProbeDecoder,
 )
@@ -139,14 +140,11 @@ class TestResidual:
 
 
 class TestGraphNetBlock:
-    """Test GraphNetBlock."""
+    """Test GraphNetBlock (node/edge-only, no globals)."""
 
     def test_forward(self, device):
         """Test basic forward pass."""
-        block = GraphNetBlock(
-            latent_dim=16,
-            global_latent_dim=None,
-        ).to(device)
+        block = GraphNetBlock(latent_dim=16).to(device)
 
         graph = GraphsTuple(
             nodes=torch.randn(5, 16, device=device),
@@ -162,12 +160,48 @@ class TestGraphNetBlock:
         assert out.nodes.shape == (5, 16)
         assert out.edges.shape == (8, 16)
 
-    def test_with_globals(self, device):
-        """Test with global features."""
-        block = GraphNetBlock(
-            latent_dim=16,
-            global_latent_dim=4,
-        ).to(device)
+    def test_globals_passed_through(self, device):
+        """Globals on the graph are passed through unchanged (not updated)."""
+        block = GraphNetBlock(latent_dim=16).to(device)
+        g = torch.randn(1, 4, device=device)
+
+        graph = GraphsTuple(
+            nodes=torch.randn(5, 16, device=device),
+            edges=torch.randn(8, 16, device=device),
+            receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),
+            senders=torch.tensor([0, 1, 2, 3, 0, 1, 2, 3], device=device),
+            globals=g,
+            n_node=torch.tensor([5], device=device),
+            n_edge=torch.tensor([8], device=device),
+        )
+
+        out = block(graph)
+        assert out.globals is g  # same object, not updated
+
+    def test_batched(self, device):
+        """Test with a batch of two graphs."""
+        block = GraphNetBlock(latent_dim=8).to(device)
+
+        graph = GraphsTuple(
+            nodes=torch.randn(7, 8, device=device),
+            edges=torch.randn(10, 8, device=device),
+            receivers=torch.randint(0, 7, (10,), device=device),
+            senders=torch.randint(0, 7, (10,), device=device),
+            n_node=torch.tensor([3, 4], device=device),
+            n_edge=torch.tensor([4, 6], device=device),
+        )
+
+        out = block(graph)
+        assert out.nodes.shape == (7, 8)
+        assert out.edges.shape == (10, 8)
+
+
+class TestGlobalGraphNetBlock:
+    """Test GlobalGraphNetBlock (full Graph Nets with globals)."""
+
+    def test_forward(self, device):
+        """Test basic forward pass with globals."""
+        block = GlobalGraphNetBlock(latent_dim=16, global_latent_dim=4).to(device)
 
         graph = GraphsTuple(
             nodes=torch.randn(5, 16, device=device),
@@ -183,10 +217,64 @@ class TestGraphNetBlock:
 
         assert out.nodes.shape == (5, 16)
         assert out.edges.shape == (8, 16)
+        assert out.globals.shape == (1, 4)
+
+    def test_globals_updated(self, device):
+        """Global vector must change after a forward pass."""
+        block = GlobalGraphNetBlock(latent_dim=8, global_latent_dim=4).to(device)
+        g = torch.randn(1, 4, device=device)
+
+        graph = GraphsTuple(
+            nodes=torch.randn(5, 8, device=device),
+            edges=torch.randn(6, 8, device=device),
+            receivers=torch.randint(0, 5, (6,), device=device),
+            senders=torch.randint(0, 5, (6,), device=device),
+            globals=g.clone(),
+            n_node=torch.tensor([5], device=device),
+            n_edge=torch.tensor([6], device=device),
+        )
+
+        out = block(graph)
+        assert not torch.allclose(out.globals, g)
+
+    def test_batched(self, device):
+        """Test with a batch of two graphs."""
+        block = GlobalGraphNetBlock(latent_dim=8, global_latent_dim=4).to(device)
+
+        graph = GraphsTuple(
+            nodes=torch.randn(7, 8, device=device),
+            edges=torch.randn(10, 8, device=device),
+            receivers=torch.randint(0, 7, (10,), device=device),
+            senders=torch.randint(0, 7, (10,), device=device),
+            globals=torch.randn(2, 4, device=device),
+            n_node=torch.tensor([3, 4], device=device),
+            n_edge=torch.tensor([4, 6], device=device),
+        )
+
+        out = block(graph)
+        assert out.nodes.shape == (7, 8)
+        assert out.edges.shape == (10, 8)
+        assert out.globals.shape == (2, 4)
+
+    def test_missing_globals_raises(self, device):
+        """AssertionError when graph.globals is None."""
+        block = GlobalGraphNetBlock(latent_dim=8, global_latent_dim=4).to(device)
+
+        graph = GraphsTuple(
+            nodes=torch.randn(5, 8, device=device),
+            edges=torch.randn(6, 8, device=device),
+            receivers=torch.randint(0, 5, (6,), device=device),
+            senders=torch.randint(0, 5, (6,), device=device),
+            n_node=torch.tensor([5], device=device),
+            n_edge=torch.tensor([6], device=device),
+        )
+
+        with pytest.raises(AssertionError, match="GlobalGraphNetBlock requires"):
+            block(graph)
 
 
 class TestGraphNetProcessor:
-    """Test GraphNetProcessor."""
+    """Test GraphNetProcessor (node/edge-only stack)."""
 
     def test_forward(self, device):
         """Test basic forward pass."""
@@ -208,6 +296,56 @@ class TestGraphNetProcessor:
 
         assert out.nodes.shape == (5, 16)
         assert out.edges.shape == (8, 16)
+
+
+class TestGlobalGraphNetProcessor:
+    """Test GlobalGraphNetProcessor (full Graph Nets stack with globals)."""
+
+    def test_forward(self, device):
+        """Test forward pass with globals."""
+        processor = GlobalGraphNetProcessor(
+            latent_dim=16,
+            global_latent_dim=4,
+            n_layers=3,
+        ).to(device)
+
+        graph = GraphsTuple(
+            nodes=torch.randn(5, 16, device=device),
+            edges=torch.randn(8, 16, device=device),
+            receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),
+            senders=torch.tensor([0, 1, 2, 3, 0, 1, 2, 3], device=device),
+            globals=torch.randn(1, 4, device=device),
+            n_node=torch.tensor([5], device=device),
+            n_edge=torch.tensor([8], device=device),
+        )
+
+        out = processor(graph)
+
+        assert out.nodes.shape == (5, 16)
+        assert out.edges.shape == (8, 16)
+        assert out.globals.shape == (1, 4)
+
+    def test_residual_globals(self, device):
+        """Residual connection must also apply to globals."""
+        processor = GlobalGraphNetProcessor(
+            latent_dim=8,
+            global_latent_dim=4,
+            n_layers=2,
+            residual=True,
+        ).to(device)
+
+        graph = GraphsTuple(
+            nodes=torch.randn(4, 8, device=device),
+            edges=torch.randn(6, 8, device=device),
+            receivers=torch.randint(0, 4, (6,), device=device),
+            senders=torch.randint(0, 4, (6,), device=device),
+            globals=torch.randn(1, 4, device=device),
+            n_node=torch.tensor([4], device=device),
+            n_edge=torch.tensor([6], device=device),
+        )
+
+        out = processor(graph)
+        assert out.globals.shape == (1, 4)
 
 
 class TestMLPDecoder:

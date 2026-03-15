@@ -5,6 +5,69 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.4] - 2026-03-15
+
+### Added
+
+- **`core/functional.py` — two new graph-level broadcast/aggregate utilities**:
+  - `broadcast_global(globals_, counts)` — repeats per-graph global vectors to
+    every node or edge (`[B, D] → [total, D]`); replaces inline
+    `torch.repeat_interleave` calls that were scattered across `GraphNetBlock`.
+  - `aggregate_to_global(features, counts, method)` — pools per-node or
+    per-edge features back to graph level (`[total, D] → [B, D]`); supports
+    `'mean'`, `'sum'`, `'max'`, `'min'`.  Both functions exported from
+    `gnn_pde_v2` root.
+
+- **`components/processors.py` — `GlobalGraphNetBlock` and
+  `GlobalGraphNetProcessor`**:
+  - Full DeepMind Graph Nets block with globals as a first-class participant.
+    Performs the complete three-step update — edges → nodes → globals — with
+    `globals` broadcast downward to every edge/node and aggregated back upward.
+  - `GlobalGraphNetBlock(latent_dim, global_latent_dim, ...)` — `global_latent_dim`
+    is a required `int`, not `Optional`; raises `AssertionError` if
+    `graph.globals is None`.
+  - `GlobalGraphNetProcessor(latent_dim, global_latent_dim, n_layers, ...)` —
+    stacks `GlobalGraphNetBlock` layers; residual connections apply to all three
+    feature streams (nodes, edges, globals).
+  - Both accept an optional `aggregate_fn` for edge-to-node aggregation and a
+    `global_pool` parameter (`'mean'` default) for node/edge → global pooling.
+
+### Changed
+
+- **`components/processors.py` — `GraphNetBlock` and `GraphNetProcessor` are now
+  node/edge-only** (no globals):
+  - `global_latent_dim` parameter **removed** from both classes.  Passing it now
+    raises `TypeError`.  Use `GlobalGraphNetBlock` / `GlobalGraphNetProcessor`
+    for graphs that carry global state.
+  - `forward` contains zero `if globals_ is not None` branches; `graph.globals`
+    is passed through unchanged.
+  - Private methods `_map_global_to_edges`, `_map_global_to_nodes`,
+    `_aggregate_to_global` removed; logic lives in `core.functional`.
+  - `scatter_sum` import replaced by `aggregate_edges` from `core.functional`.
+  - Added `aggregate_fn` injection parameter (default: sum) for custom
+    edge-to-node pooling.
+  - Residual path in `GraphNetProcessor` no longer guards on
+    `graph.nodes is not None`.
+
+- **`models/gnn_model.py` — `GraphNet` and `MeshGraphNet`**:
+  - `GraphNet` now branches on `global_in_dim`: selects `GlobalGraphNetProcessor`
+    when globals are present, `GraphNetProcessor` otherwise.
+  - `MeshGraphNet` uses plain `GraphNetProcessor` with no `global_latent_dim`
+    argument (was previously passing `global_latent_dim=None`).
+
+- **`components/__init__.py`** — exports `GlobalGraphNetBlock`,
+  `GlobalGraphNetProcessor`.
+
+### Tests
+
+- `TestGraphNetBlock` — updated: `global_latent_dim=None` call removed; added
+  `test_globals_passed_through` and `test_batched`.
+- `TestGlobalGraphNetBlock` — new: `test_forward`, `test_globals_updated`,
+  `test_batched`, `test_missing_globals_raises`.
+- `TestGlobalGraphNetProcessor` — new: `test_forward`, `test_residual_globals`.
+
+---
+
 ## [2.6.3] - 2026-03-14
 
 ### Changed

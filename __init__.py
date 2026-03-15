@@ -26,6 +26,8 @@ from .core.functional import (
     scatter_softmax,
     aggregate_edges,
     broadcast_nodes_to_edges,
+    broadcast_global,
+    aggregate_to_global,
 )
 
 __all__ = [
@@ -42,4 +44,6 @@ __all__ = [
     "scatter_softmax",
     "aggregate_edges",
     "broadcast_nodes_to_edges",
+    "broadcast_global",
+    "aggregate_to_global",
 ]

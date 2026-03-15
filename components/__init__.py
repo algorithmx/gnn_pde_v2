@@ -9,13 +9,26 @@ Graph-based processors (work with GraphsTuple):
     - TransformerBlock, TransformerProcessor
 
 Spectral/Grid-based processors (work with regular grid tensors):
-    - FNOProcessor, SpectralConv, FNOBlock, AFNOBlock
+    - FNOProcessor, SpectralConv, SeparableSpectralConv, SpectralConvBase
+    - FNOBlock, AFNOBlock
 
 Note: Spectral processors are NOT compatible with graph data structures.
 For graph data, use GraphNetProcessor or TransformerProcessor instead.
 
 Note: MLP is now in core. Import with:
     from gnn_pde_v2.core import MLP
+
+Factory Functions:
+    Factory functions are provided ONLY for runtime polymorphism scenarios
+    where the component type is determined at runtime (e.g., from config).
+    For explicit construction, prefer direct class instantiation.
+    
+    Available factories:
+    - make_residual: Select residual connection type ('add', 'gated', 'scaled', etc.)
+    - make_spectral_conv: Select spectral conv implementation (standard vs separable)
+    
+    Prefer direct classes for:
+    - MeshEncoder, MLPDecoder, GraphNetProcessor, FNOProcessor
 
 Example:
     from gnn_pde_v2.core import MLP
@@ -29,13 +42,15 @@ Example:
 """
 
 from .fourier_encoder import FourierFeatureEncoder
-from .encoders import MeshEncoder
 from .layers import (
     Residual,
     GatedResidual,
     make_residual,
 )
-from .processors import GraphNetBlock, GraphNetProcessor
+from .processors import (
+    GraphNetBlock, GraphNetProcessor,
+    GlobalGraphNetBlock, GlobalGraphNetProcessor,
+)
 from .decoders import MLPDecoder, IndependentMLPDecoder
 from .probe import ProbeDecoder, ProbeMessagePassingLayer
 from .transformer import (
@@ -44,7 +59,7 @@ from .transformer import (
     Modulation, ConditioningProtocol,
     ZeroConditioning, AdaLNConditioning, DualAdaLNConditioning, FiLMConditioning,
 )
-from .spectral import FNOProcessor, SpectralConv, FNOBlock, AFNOBlock
+from .spectral import FNOProcessor, SpectralConv, SeparableSpectralConv, SpectralConvBase, make_spectral_conv, FNOBlock, AFNOBlock
 
 # Structural protocols — also available from gnn_pde_v2.core
 from ..core.protocols import (
@@ -60,20 +75,24 @@ from ..core.protocols import (
 __all__ = [
     # Encoders
     "FourierFeatureEncoder",
-    "MeshEncoder",
     # Layers (residual connections)
     "Residual",
     "GatedResidual",
     "make_residual",
     # Processors
     "GraphNetBlock",
+    "GlobalGraphNetBlock",
     "GraphNetProcessor",
+    "GlobalGraphNetProcessor",
     "TransformerBlock",
     "TransformerProcessor",
     "MultiHeadAttention",
     "PhysicsTokenAttention",
     "FNOProcessor",
     "SpectralConv",
+    "SeparableSpectralConv",
+    "SpectralConvBase",
+    "make_spectral_conv",
     "FNOBlock",
     "AFNOBlock",
     # Decoders
