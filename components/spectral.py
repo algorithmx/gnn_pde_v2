@@ -8,73 +8,134 @@ For graph-based processing, use processors.py (GraphNetProcessor) or
 transformer.py (TransformerProcessor).
 
 Classes:
-    SpectralConv: Spectral convolution layer
+    SpectralConvBase: Abstract base class for spectral convolutions
+    SpectralConv: Standard (non-separable) spectral convolution layer
+    SeparableSpectralConv: Factorized spectral convolution for memory efficiency
     FNOBlock: Single FNO block (spectral conv + MLP)
     AFNOBlock: Adaptive FNO block with soft thresholding
     FNOProcessor: Complete FNO pipeline with lifting/projection
+
+Factory:
+    make_spectral_conv: Convenience factory for creating spectral conv layers
 """
 
-from typing import Optional, List, Tuple
+from abc import ABC, abstractmethod
+from typing import Optional, List, Tuple, Union, Callable, Any
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
+
+from ..core.mlp import MLP
+
+
+def compl_mul_nd(input: torch.Tensor, weights: torch.Tensor, n_dim: int) -> torch.Tensor:
+    """
+    Complex multiplication in n-dimensional Fourier space.
+    
+    Unified implementation that works for any dimension (1D, 2D, 3D, etc.)
+    using dynamic einsum string generation.
+    
+    Args:
+        input: [B, C_in, *spatial_dims] - Input in Fourier space
+        weights: [C_in, C_out, *spatial_dims] - Complex weights
+        n_dim: Number of spatial dimensions
+        
+    Returns:
+        [B, C_out, *spatial_dims] - Output in Fourier space
+    """
+    # Generate einsum subscripts: b=batch, i=in_channels, o=out_channels
+    # spatial dims use letters x, y, z, w (up to 4D)
+    spatial_subs = "xyzw"[:n_dim]
+    # einsum: b i {spatial}, i o {spatial} -> b o {spatial}
+    einsum_str = f"bi{spatial_subs},io{spatial_subs}->bo{spatial_subs}"
+    return torch.einsum(einsum_str, input, weights)
 
 
 def compl_mul1d(input: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
     """Complex multiplication in 1D Fourier space."""
     # input: [B, C, L], weights: [C, C', L]
-    return torch.einsum("bcl,ccl->bcl", input, weights)
+    return compl_mul_nd(input, weights, n_dim=1)
 
 
 def compl_mul2d(input: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
     """Complex multiplication in 2D Fourier space."""
     # input: [B, C, H, W], weights: [C, C', H, W]
-    return torch.einsum("bchw,cchw->bchw", input, weights)
+    return compl_mul_nd(input, weights, n_dim=2)
 
 
 def compl_mul3d(input: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
     """Complex multiplication in 3D Fourier space."""
     # input: [B, C, D, H, W], weights: [C, C', D, H, W]
-    return torch.einsum("bcdhw,ccdhw->bcdhw", input, weights)
+    return compl_mul_nd(input, weights, n_dim=3)
 
 
-class SpectralConv(nn.Module):
+def _get_conv_nd(n_dim: int, in_ch: int, out_ch: int, kernel_size: int = 1) -> nn.Module:
     """
-    Spectral convolution layer.
+    Factory function to get the appropriate Conv layer for n-dimensional data.
+    
+    Args:
+        n_dim: Spatial dimension (1, 2, or 3)
+        in_ch: Number of input channels
+        out_ch: Number of output channels
+        kernel_size: Kernel size for the convolution (default: 1 for pointwise)
+        
+    Returns:
+        nn.Conv1d, nn.Conv2d, or nn.Conv3d instance
+        
+    Raises:
+        ValueError: If n_dim is not 1, 2, or 3
+    """
+    conv_classes = {1: nn.Conv1d, 2: nn.Conv2d, 3: nn.Conv3d}
+    if n_dim not in conv_classes:
+        raise ValueError(f"n_dim must be 1, 2, or 3, got {n_dim}")
+    return conv_classes[n_dim](in_ch, out_ch, kernel_size)
 
-    Performs convolution in Fourier space with learnable complex weights.
+
+# ---------------------------------------------------------------------------
+# SpectralConv Base Class and Implementations
+# ---------------------------------------------------------------------------
+
+class SpectralConvBase(nn.Module, ABC):
+    """
+    Abstract base class for spectral convolution layers.
+
+    Provides the common FFT/IFFT framework; subclasses implement the
+    specific spectral multiplication strategy.
+
+    Args:
+        in_channels: Number of input channels
+        out_channels: Number of output channels
+        modes: Number of Fourier modes to keep per dimension
     """
 
-    def __init__(
-        self,
-        in_channels: int,
-        out_channels: int,
-        modes: List[int],
-        separable: bool = False,
-    ):
+    def __init__(self, in_channels: int, out_channels: int, modes: List[int]):
         super().__init__()
 
         self.in_channels = in_channels
         self.out_channels = out_channels
         self.modes = modes
         self.n_dim = len(modes)
-        self.separable = separable
-
-        # Scale for weight initialization
         self.scale = 1 / (in_channels * out_channels)
 
-        # Complex weights for Fourier modes
-        if separable:
-            # Separable weights: one per dimension
-            self.weights = nn.ParameterList([
-                nn.Parameter(self.scale * torch.rand(in_channels, out_channels, modes[i], 2))
-                for i in range(self.n_dim)
-            ])
-        else:
-            # Full weights: all dimensions together
-            weights_shape = [in_channels, out_channels] + list(modes) + [2]
-            self.weights = nn.Parameter(self.scale * torch.rand(*weights_shape))
+        self._init_weights()
+
+    @abstractmethod
+    def _init_weights(self) -> None:
+        """Initialize spectral weights. Subclasses define weight structure."""
+        ...
+
+    @abstractmethod
+    def _apply_spectral_conv(self, x_ft: torch.Tensor, out_ft: torch.Tensor) -> torch.Tensor:
+        """Apply spectral convolution in Fourier space.
+
+        Args:
+            x_ft: Input in Fourier space [B, C, *ft_dims]
+            out_ft: Pre-allocated output tensor [B, C', *ft_dims]
+
+        Returns:
+            Modified out_ft with spectral convolution applied
+        """
+        ...
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -98,27 +159,153 @@ class SpectralConv(nn.Module):
             device=x.device,
         )
 
-        # Multiply relevant Fourier modes
-        if self.n_dim == 1:
-            out_ft[:, :, :self.modes[0]] = compl_mul1d(
-                x_ft[:, :, :self.modes[0]],
-                torch.view_as_complex(self.weights)
-            )
-        elif self.n_dim == 2:
-            out_ft[:, :, :self.modes[0], :self.modes[1]] = compl_mul2d(
-                x_ft[:, :, :self.modes[0], :self.modes[1]],
-                torch.view_as_complex(self.weights)
-            )
-        elif self.n_dim == 3:
-            out_ft[:, :, :self.modes[0], :self.modes[1], :self.modes[2]] = compl_mul3d(
-                x_ft[:, :, :self.modes[0], :self.modes[1], :self.modes[2]],
-                torch.view_as_complex(self.weights)
-            )
+        # Apply spectral convolution (subclass-specific)
+        out_ft = self._apply_spectral_conv(x_ft, out_ft)
 
         # IFFT
         x = torch.fft.irfftn(out_ft, s=x.shape[2:], dim=list(range(2, 2 + self.n_dim)), norm='ortho')
 
         return x
+
+
+class SpectralConv(SpectralConvBase):
+    """
+    Standard (non-separable) spectral convolution layer.
+
+    Performs convolution in Fourier space with a full weight tensor.
+    Uses O(C^2 * prod(modes)) parameters.
+
+    Args:
+        in_channels: Number of input channels
+        out_channels: Number of output channels
+        modes: Number of Fourier modes to keep per dimension
+    """
+
+    def __init__(self, in_channels: int, out_channels: int, modes: List[int]):
+        super().__init__(in_channels, out_channels, modes)
+
+    def _init_weights(self) -> None:
+        """Initialize full spectral weight tensor."""
+        weights_shape = [self.in_channels, self.out_channels] + list(self.modes) + [2]
+        self.weights = nn.Parameter(self.scale * torch.rand(*weights_shape))
+
+    def _apply_spectral_conv(self, x_ft: torch.Tensor, out_ft: torch.Tensor) -> torch.Tensor:
+        """Apply standard (non-separable) spectral convolution."""
+        weights_complex = torch.view_as_complex(self.weights)
+        
+        # Build slice tuple for indexing: [:, :, :modes[0], :modes[1], ...]
+        slice_idx = (slice(None), slice(None)) + tuple(slice(0, m) for m in self.modes)
+        
+        # Apply unified n-dimensional complex multiplication
+        out_ft[slice_idx] = compl_mul_nd(x_ft[slice_idx], weights_complex, self.n_dim)
+
+        return out_ft
+
+
+class SeparableSpectralConv(SpectralConvBase):
+    """
+    Separable (factorized) spectral convolution layer.
+
+    Applies 1D spectral convolution along each dimension independently,
+    then combines the results. This factorization reduces parameters from
+    O(C^2 * prod(modes)) to O(n_dim * C^2 * max(modes)).
+
+    This is particularly beneficial for high-dimensional problems (2D, 3D)
+    where the full spectral weight tensor becomes prohibitively large.
+
+    Args:
+        in_channels: Number of input channels
+        out_channels: Number of output channels
+        modes: Number of Fourier modes to keep per dimension
+    """
+
+    def __init__(self, in_channels: int, out_channels: int, modes: List[int]):
+        super().__init__(in_channels, out_channels, modes)
+
+    def _init_weights(self) -> None:
+        """Initialize per-dimension weight tensors."""
+        self.weights = nn.ParameterList([
+            nn.Parameter(self.scale * torch.rand(self.in_channels, self.out_channels, self.modes[i], 2))
+            for i in range(self.n_dim)
+        ])
+
+    def _apply_spectral_conv(self, x_ft: torch.Tensor, out_ft: torch.Tensor) -> torch.Tensor:
+        """Apply separable spectral convolution."""
+        # For each dimension, apply the corresponding 1D weight
+        # We accumulate contributions from each dimension
+        for dim_idx, weight in enumerate(self.weights):
+            weights_complex = torch.view_as_complex(weight)
+            mode = self.modes[dim_idx]
+            
+            # Build slice for input: slice the current dimension up to mode
+            # For dim_idx=0 in 2D: [:, :, :mode, :] -> slice all of dim 0 (H)
+            # For dim_idx=1 in 2D: [:, :, :, :mode] -> slice all of dim 1 (W)
+            input_slices = [slice(None), slice(None)]  # batch and channels
+            for d in range(self.n_dim):
+                if d == dim_idx:
+                    input_slices.append(slice(0, mode))
+                else:
+                    input_slices.append(slice(None))
+            
+            # Build slice for output (same pattern)
+            output_slices = tuple(input_slices)
+            
+            # Extract input slice
+            slice_in = x_ft[output_slices]
+            
+            # Build einsum string for this dimension
+            # Pattern: contract along the current dimension only
+            # For 1D: "bix,iox->box" (full contraction since only 1 dim)
+            # For 2D dim0: "bixy,iox->boxy" (contract x, keep y)
+            # For 2D dim1: "bixy,ioy->boxy" (contract y, keep x)
+            spatial_letters = "xyzw"[:self.n_dim]
+            current_letter = spatial_letters[dim_idx]
+            
+            # einsum: bi{spatial}, io{current} -> bo{spatial}
+            einsum_str = f"bi{spatial_letters},io{current_letter}->bo{spatial_letters}"
+            
+            # Apply einsum - this contracts along the current dimension
+            out_contribution = torch.einsum(einsum_str, slice_in, weights_complex)
+            
+            # Accumulate into output
+            out_ft[output_slices] = out_ft[output_slices] + out_contribution
+
+        return out_ft
+
+
+def make_spectral_conv(
+    in_channels: int,
+    out_channels: int,
+    modes: List[int],
+    separable: bool = False,
+) -> SpectralConvBase:
+    """
+    Factory function for creating spectral convolution layers.
+
+    Use this factory when the spectral conv type is determined at runtime
+    (e.g., from configuration). For fixed implementations, prefer direct
+    class instantiation for better type clarity.
+
+    Args:
+        in_channels: Number of input channels
+        out_channels: Number of output channels
+        modes: Number of Fourier modes to keep per dimension
+        separable: If True, use SeparableSpectralConv; otherwise SpectralConv
+
+    Returns:
+        SpectralConv or SeparableSpectralConv instance
+
+    Example:
+        >>> # Use factory for runtime selection (config-driven)
+        >>> conv = make_spectral_conv(64, 64, [16, 16], separable=config.use_separable)
+        >>>
+        >>> # Use direct class for explicit construction
+        >>> conv = SpectralConv(64, 64, [16, 16])
+        >>> conv = SeparableSpectralConv(64, 64, [16, 16])  # Memory-efficient
+    """
+    if separable:
+        return SeparableSpectralConv(in_channels, out_channels, modes)
+    return SpectralConv(in_channels, out_channels, modes)
 
 
 class AFNOBlock(nn.Module):
@@ -127,6 +314,12 @@ class AFNOBlock(nn.Module):
 
     Uses block-diagonal weights and soft-thresholding for sparsity.
     Reference: Guibas et al. "Adaptive Fourier Neural Operators" (2021)
+
+    Args:
+        hidden_dim: Number of hidden channels (must be divisible by num_blocks)
+        num_blocks: Number of blocks for block-diagonal weight matrix
+        sparsity_threshold: Threshold for soft-thresholding sparsity (0 to disable)
+        n_dim: Spatial dimension (1, 2, or 3)
     """
 
     def __init__(
@@ -211,6 +404,18 @@ class AFNOBlock(nn.Module):
 class FNOBlock(nn.Module):
     """
     FNO block: Spectral convolution + pointwise MLP.
+
+    Args:
+        width: Hidden channel dimension
+        modes: Number of Fourier modes to keep per dimension
+        n_dim: Spatial dimension (1, 2, or 3)
+        activation: Activation function. Supports 'relu', 'gelu', 'silu', 'tanh',
+            'sigmoid', 'sin', or a callable/Module. Defaults to 'gelu'.
+        use_afno: Use Adaptive FNO block instead of standard spectral convolution
+        num_blocks: Number of blocks for AFNO (only used if use_afno=True)
+        separable: Use separable (factorized) spectral convolutions. When True,
+            uses SeparableSpectralConv instead of SpectralConv, reducing
+            memory from O(C^2 * prod(modes)) to O(n_dim * C^2 * max(modes)).
     """
 
     def __init__(
@@ -218,9 +423,10 @@ class FNOBlock(nn.Module):
         width: int,
         modes: List[int],
         n_dim: int,
-        activation: str = 'gelu',
+        activation: Union[str, nn.Module, Callable, None] = 'gelu',
         use_afno: bool = False,
         num_blocks: int = 8,
+        separable: bool = False,
     ):
         super().__init__()
 
@@ -231,21 +437,13 @@ class FNOBlock(nn.Module):
         if use_afno:
             self.spectral_conv = AFNOBlock(width, num_blocks, n_dim=n_dim)
         else:
-            self.spectral_conv = SpectralConv(width, width, modes, separable=False)
+            self.spectral_conv = make_spectral_conv(width, width, modes, separable=separable)
 
         # Pointwise MLP
-        self.mlp = nn.Conv1d(width, width, 1) if n_dim == 1 else \
-                   nn.Conv2d(width, width, 1) if n_dim == 2 else \
-                   nn.Conv3d(width, width, 1)
+        self.mlp = _get_conv_nd(n_dim, width, width, kernel_size=1)
 
-        if activation == 'gelu':
-            self.activation = nn.GELU()
-        elif activation == 'relu':
-            self.activation = nn.ReLU()
-        elif activation == 'silu':
-            self.activation = nn.SiLU()
-        else:
-            raise ValueError(f"Unknown activation: {activation}")
+        # Use shared activation factory from MLP
+        self.activation = MLP._make_activation(activation)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -273,6 +471,18 @@ class FNOProcessor(nn.Module):
     Input/Output:
         x: [B, in_channels, *spatial_dims] - regular grid data
         returns: [B, out_channels, *spatial_dims]
+
+    Args:
+        in_channels: Number of input channels
+        out_channels: Number of output channels
+        width: Hidden channel dimension
+        modes: Number of Fourier modes to keep per dimension
+        n_layers: Number of FNO blocks
+        n_dim: Spatial dimension (1, 2, or 3)
+        use_afno: Use Adaptive FNO blocks with block-diagonal weights
+        num_blocks: Number of blocks for AFNO (only used if use_afno=True)
+        separable: Use separable (factorized) spectral convolutions. Reduces
+            memory from O(C^2 * prod(modes)) to O(n_dim * C^2 * max(modes)).
     """
 
     def __init__(
@@ -285,6 +495,7 @@ class FNOProcessor(nn.Module):
         n_dim: int = 2,
         use_afno: bool = False,
         num_blocks: int = 8,
+        separable: bool = False,
     ):
         super().__init__()
 
@@ -294,14 +505,7 @@ class FNOProcessor(nn.Module):
         self.n_dim = n_dim
 
         # Lifting layer
-        if n_dim == 1:
-            self.lifting = nn.Conv1d(in_channels, width, 1)
-        elif n_dim == 2:
-            self.lifting = nn.Conv2d(in_channels, width, 1)
-        elif n_dim == 3:
-            self.lifting = nn.Conv3d(in_channels, width, 1)
-        else:
-            raise ValueError(f"n_dim must be 1, 2, or 3, got {n_dim}")
+        self.lifting = _get_conv_nd(n_dim, in_channels, width, kernel_size=1)
 
         # FNO blocks
         self.blocks = nn.ModuleList([
@@ -311,17 +515,13 @@ class FNOProcessor(nn.Module):
                 n_dim=n_dim,
                 use_afno=use_afno,
                 num_blocks=num_blocks,
+                separable=separable,
             )
             for _ in range(n_layers)
         ])
 
         # Projection layer
-        if n_dim == 1:
-            self.projection = nn.Conv1d(width, out_channels, 1)
-        elif n_dim == 2:
-            self.projection = nn.Conv2d(width, out_channels, 1)
-        elif n_dim == 3:
-            self.projection = nn.Conv3d(width, out_channels, 1)
+        self.projection = _get_conv_nd(n_dim, width, out_channels, kernel_size=1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -342,3 +542,23 @@ class FNOProcessor(nn.Module):
         x = self.projection(x)
 
         return x
+
+
+__all__ = [
+    # Complex multiplication functions
+    "compl_mul_nd",
+    "compl_mul1d",
+    "compl_mul2d",
+    "compl_mul3d",
+    # Factory functions
+    "_get_conv_nd",
+    "make_spectral_conv",
+    # Spectral convolution classes
+    "SpectralConvBase",
+    "SpectralConv",
+    "SeparableSpectralConv",
+    # FNO components
+    "AFNOBlock",
+    "FNOBlock",
+    "FNOProcessor",
+]

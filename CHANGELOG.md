@@ -5,6 +5,49 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.6.5] - 2026-03-15
+
+### Added
+
+- **`tests/test_fno.py`** — comprehensive test suite for FNO components:
+  - Tests for `SpectralConv`, `SeparableSpectralConv`, `FNOBlock`, `AFNOBlock`,
+    and `FNOProcessor`.
+  - Dimensionality tests (1D, 2D, 3D), gradient flow verification, and
+    device-agnostic execution (CPU/CUDA).
+
+- **`components/spectral.py` — `SpectralConvBase` abstract base class**:
+  - Unified `compl_mul_nd()` using dynamic einsum for n-dimensional Fourier space
+    multiplication (replaces separate 1D/2D/3D implementations).
+  - `make_spectral_conv()` factory for runtime selection between standard and
+    separable spectral convolutions.
+
+- **`.gitignore`** — added `.pytest*/` and `.benchmark*/` to ignore test and
+  benchmark artifacts.
+
+### Changed
+
+- **`README.md`** — added "Global Features: Design Philosophy" section explaining
+  the DeepMind Graph Nets `globals` design pattern, when to use globals vs
+  node/edge-only features, and how they flow through `GlobalGraphNetBlock`.
+  Updated usage patterns with factory function guidance.
+
+- **`components/layers.py` — `make_residual()` documentation**:
+  - Clarified factory usage for runtime polymorphism vs direct class
+    instantiation for explicit construction.
+
+- **`components/processors.py`** — removed unused imports (`broadcast_global`,
+  `aggregate_to_global`) from `GraphNetBlock` (now internal to globals-enabled
+  processors only).
+
+### Removed
+
+- **`architectural-review-report.md`** — deleted obsolete design review document.
+
+- **`components/encoders.py` — `MeshEncoder` class**:
+  - Consolidated on `MLPMeshEncoder` as the canonical mesh encoder.
+
+---
+
 ## [2.6.4] - 2026-03-15
 
 ### Added

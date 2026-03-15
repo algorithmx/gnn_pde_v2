@@ -302,6 +302,58 @@ The framework gracefully handles missing optional dependencies - features are di
 5. **Graceful Degradation**: Optional dependencies with clear fallbacks
 6. **Testing First**: Comprehensive test coverage for all components
 
+---
+
+## Global Features: Design Philosophy
+
+This framework carries `globals` as a first-class field on `GraphsTuple`, following the [DeepMind Graph Nets](https://arxiv.org/abs/1806.01261) design. This is a deliberate choice absent from most graph ML libraries (including PyTorch Geometric) and deserves explicit explanation.
+
+### What globals are
+
+`globals` is a tensor of shape `[batch_size, global_feat_dim]` — one vector per graph in the batch. It lives at a level above nodes and edges and represents information that belongs to the *whole system*, not to any individual node or edge.
+
+### Why globals matter for PDEs
+
+In PDE solving, global features naturally encode quantities that govern the entire domain:
+
+- **PDE parameters**: Reynolds number, viscosity, diffusion coefficient, forcing frequency — these condition the solution everywhere, not at one mesh node.
+- **Boundary/initial conditions summary**: a compressed representation of the full boundary state that every node should be aware of.
+- **Time step or simulation time**: when solving time-dependent PDEs, the current time `t` is a scalar that affects every node equally.
+- **Geometry metadata**: domain area, characteristic length scale, or any per-simulation invariant.
+
+Without globals, you would have to redundantly copy this information into every node's feature vector before encoding — which is what most PyG-style models do. The globals slot instead transmits it cleanly and symmetrically through the message passing stack.
+
+### How globals flow through `GlobalGraphNetBlock`
+
+Each message passing step performs three updates in order:
+
+```
+1. Edge update:   new_e_ij = MLP([node_i, node_j, e_ij, g])
+2. Node update:   new_v_i  = MLP([v_i, Σ_j new_e_ij, g])
+3. Global update: new_g    = MLP([mean(new_v), mean(new_e), g])
+```
+
+- **Steps 1 & 2**: globals are *broadcast* to every edge/node (via `broadcast_global`) and concatenated into the MLP input, so every computation is conditioned on the system-level state.
+- **Step 3**: the global vector is *updated* by aggregating (via `aggregate_to_global`) the new node and edge features back up, so it can accumulate latent information about the whole graph as processing proceeds.
+
+This creates a bidirectional information flow: globals conditioning local computation downward, and local state aggregating back upward — a complete information loop unavailable in node/edge-only frameworks.
+
+### When to use globals
+
+| Use globals for | Keep in nodes/edges |
+|---|---|
+| PDE coefficients (Re, ν, κ) | Local field values (velocity, pressure at a node) |
+| Simulation time `t` | Edge geometry (displacement, distance) |
+| Boundary condition summary | Per-node boundary flags |
+| Geometry-level invariants | Per-node coordinates |
+| Cross-graph conditioning | Local connectivity |
+
+### When to leave globals as `None`
+
+If all conditioning information is already encoded per-node (e.g., the PDE parameters have been appended to each node's input features), use `GraphNetBlock` / `GraphNetProcessor` directly — they carry no global machinery at all, so there is zero overhead and no dead code paths.
+
+---
+
 ## Usage Patterns
 
 ### Research Development (Lean API)
@@ -309,12 +361,15 @@ The framework gracefully handles missing optional dependencies - features are di
 ```python
 from gnn_pde_v2 import GraphsTuple
 from gnn_pde_v2.core import MLP
-from gnn_pde_v2.components import GraphNetBlock, Residual
+from gnn_pde_v2.components import GraphNetBlock, GlobalGraphNetBlock, Residual
 
-# Direct component composition for maximum flexibility
+# Node/edge-only (no global state)
 encoder = MLP(in_dim=5, out_dim=128, hidden_dims=[128], use_layer_norm=False)
-processor = Residual(GraphNetBlock(128, 128))
+processor = Residual(GraphNetBlock(latent_dim=128))
 decoder = MLP(in_dim=128, out_dim=2, hidden_dims=[64], use_layer_norm=False)
+
+# With global state (PDE parameters, time, BCs)
+processor_g = Residual(GlobalGraphNetBlock(latent_dim=128, global_latent_dim=32))
 ```
 
 ### Model Registry
@@ -331,6 +386,32 @@ class MyModel(AutoRegisterModel, name='my_model'):
 # Create by name
 model = AutoRegisterModel.create('my_model', hidden_dim=256)
 ```
+
+### Factory Functions
+
+Factory functions are provided **only for runtime polymorphism** where the component type is determined at runtime (e.g., from configuration). For explicit construction, prefer direct class instantiation.
+
+```python
+from gnn_pde_v2.components import make_residual, make_spectral_conv
+from gnn_pde_v2.components import Residual, GatedResidual, SpectralConv
+
+# Use factories for runtime selection (config-driven)
+residual_block = make_residual(module, residual_type=config.residual_type)  # 'add', 'gated', etc.
+conv = make_spectral_conv(64, 64, modes, separable=config.use_separable)
+
+# Use direct classes for explicit construction (preferred)
+residual_block = Residual(module)
+residual_block = GatedResidual(module, gate_bias=2.0)
+conv = SpectralConv(64, 64, [16, 16])
+```
+
+**Available factories:**
+- `make_residual`: Select residual connection type at runtime
+- `make_spectral_conv`: Select spectral conv implementation (standard vs separable)
+
+**Prefer direct classes for:**
+- `MeshEncoder`, `MLPDecoder` - Direct instantiation is clearer
+- `GraphNetProcessor`, `FNOProcessor` - No runtime selection needed
 
 ### Paper Reproduction
 

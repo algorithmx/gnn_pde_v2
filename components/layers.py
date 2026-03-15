@@ -160,6 +160,11 @@ def make_residual(
     """
     Factory function to create appropriate residual wrapper.
 
+    Use this factory when the residual type is determined at runtime (e.g., from
+    configuration). For fixed residual types, prefer direct instantiation:
+        - Simple residual: Residual(module)
+        - Gated residual: GatedResidual(module, gate_bias=2.0)
+
     Args:
         module: Module to wrap
         residual_type: Type of residual wrapper:
@@ -177,9 +182,12 @@ def make_residual(
         Wrapped module with residual connections
 
     Example:
-        >>> block = make_residual(nn.Linear(64, 64), 'add')
-        >>> block = make_residual(nn.Linear(64, 64), 'gated', gate_bias=2.0)
-        >>> block = make_residual(attention_module, 'prenorm', dim=256)
+        >>> # Use factory for runtime selection (config-driven)
+        >>> block = make_residual(nn.Linear(64, 64), config.residual_type)
+        >>>
+        >>> # Use direct class for explicit construction
+        >>> block = Residual(nn.Linear(64, 64))
+        >>> block = GatedResidual(nn.Linear(64, 64), gate_bias=2.0)
     """
     if residual_type == 'add':
         return Residual(module)

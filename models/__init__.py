@@ -27,9 +27,8 @@ def __getattr__(name: str):
     if name in _LAZY_MODELS:
         module_name, class_name = _LAZY_MODELS[name]
         try:
-            module = __import__(
-                module_name, globals(), locals(), fromlist=[class_name], level=1
-            )
+            import importlib
+            module = importlib.import_module(module_name, package=__name__)
             return getattr(module, class_name)
         except ImportError as e:
             raise ImportError(

@@ -2,14 +2,15 @@
 Convenience models for Fourier Neural Operators.
 """
 
-from typing import List, Optional
+from typing import List
 import torch
 import torch.nn as nn
-from ..core.registry import AutoRegisterModel
+from ..core.registry import MODEL_REGISTRY
 from ..components.spectral import FNOProcessor
 
 
-class FNO(AutoRegisterModel, name='fno'):
+@MODEL_REGISTRY.register('fno', aliases=['fourier_no', 'fno2d'])
+class FNO(nn.Module):
     """
     Fourier Neural Operator for regular grids.
     
@@ -64,13 +65,22 @@ class FNO(AutoRegisterModel, name='fno'):
         return self.fno(x)
 
 
-class TFNO(AutoRegisterModel, name='tfno'):
+@MODEL_REGISTRY.register('tfno', aliases=['tensorized_fno'])
+class TFNO(nn.Module):
     """
     Tensorized Fourier Neural Operator (TFNO).
-    
-    Uses separable spectral convolutions for improved efficiency.
-    Similar to FNO but with factorized weight tensors.
-    
+
+    Uses separable (factorized) spectral convolutions for improved memory
+    efficiency. Instead of storing a full weight tensor of shape
+    [C, C, *modes], stores one tensor per dimension, reducing memory from
+    O(C^2 * prod(modes)) to O(n_dim * C^2 * max(modes)).
+
+    This is particularly beneficial for high-dimensional problems (2D, 3D)
+    where the full spectral weight tensor becomes prohibitively large.
+
+    Reference: Li et al. "Fourier Neural Operator for Parametric Partial
+    Differential Equations" (2021) - see Section 3.3 on tensor decomposition.
+
     Args:
         in_channels: Number of input channels
         out_channels: Number of output channels
@@ -79,7 +89,7 @@ class TFNO(AutoRegisterModel, name='tfno'):
         n_layers: Number of spectral convolution layers
         n_dim: Spatial dimension (1, 2, or 3)
     """
-    
+
     def __init__(
         self,
         in_channels: int,
@@ -90,8 +100,8 @@ class TFNO(AutoRegisterModel, name='tfno'):
         n_dim: int = 2,
     ):
         super().__init__()
-        
-        # Use separable convolutions via AFNO-like block structure
+
+        # Use separable convolutions for factorized weights
         self.fno = FNOProcessor(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -99,9 +109,10 @@ class TFNO(AutoRegisterModel, name='tfno'):
             modes=modes,
             n_layers=n_layers,
             n_dim=n_dim,
-            use_afno=False,  # Standard FNO but can be extended
+            use_afno=False,
+            separable=True,  # Key difference from FNO: factorized weights
         )
-        
+
         self.n_dim = n_dim
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -115,7 +126,8 @@ class TFNO(AutoRegisterModel, name='tfno'):
         return self.fno(x)
 
 
-class AFNO(AutoRegisterModel, name='afno'):
+@MODEL_REGISTRY.register('afno', aliases=['adaptive_fno'])
+class AFNO(nn.Module):
     """
     Adaptive Fourier Neural Operator.
     
