@@ -6,6 +6,28 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.7.5] - 2026-03-16
+
+### Added
+
+- **Temperature mechanisms for attention-based models** — `components/temperature.py`:
+  - `TemperatureBase`: Abstract base class for temperature mechanisms
+  - `FixedTemperature`: Fixed temperature (backward compatible)
+  - `LearnableScalarTemperature`: Global learnable scalar temperature
+  - `PerHeadTemperature`: Per-head learnable temperature (from research papers)
+  - `AdaptiveTemperature`: Per-point adaptive temperature (Ada-Temp from Transolver++)
+  - `AnnealedTemperature`: Training-time temperature annealing (from Low-Width Graph Transformers)
+  - `create_temperature_module()`: Factory function for creating temperature modules
+
+### Changed
+
+- `components/transformer.py` — Integrated temperature support in transformer models:
+  - Added `temperature` and `temperature_mode` parameters to `SliceAttention`, `PhysicsTokenTransformer`, and `GraphTransformer`
+  - Supported temperature modes: `'fixed'`, `'learnable_scalar'`, `'per_head'`, `'adaptive'`, `'annealed'`
+  - Added optional Gumbel-Softmax noise support (following Transolver++ Eq. 4)
+  - Added `set_epoch()` method for temperature annealing schedules
+  - New parameters: `min_temperature`, `anneal_warmup_epochs`, `anneal_factor`, `anneal_final_temp`
+
 
 ## [2.7.4] - 2026-03-16
 

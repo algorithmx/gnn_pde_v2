@@ -17,6 +17,7 @@ from torch.utils.checkpoint import checkpoint
 from ..core.mlp import MLP
 from ..core.graph import GraphsTuple
 from ..core.protocols import Modulation, ConditioningProtocol
+from .temperature import create_temperature_module, TemperatureBase
 
 
 # =============================================================================
@@ -409,6 +410,16 @@ class PhysicsTokenAttention(nn.Module):
     Transolver-style slice-attention-deslice attention.
     
     Reduces complexity from O(N^2) to O(G^2) where G << N (learnable physics tokens).
+    
+    Supports adaptive temperature mechanisms for controlling attention distribution
+    sharpness based on local physical properties.
+    
+    Temperature modes:
+        - 'fixed': Fixed temperature (backward compatible, default)
+        - 'learnable_scalar': Global learnable temperature
+        - 'per_head': Per-head learnable temperature
+        - 'adaptive': Per-point adaptive temperature (Ada-Temp from Transolver++)
+        - 'annealed': Training-time temperature annealing schedule
     """
     
     def __init__(
@@ -417,6 +428,13 @@ class PhysicsTokenAttention(nn.Module):
         n_tokens: int = 32,
         n_heads: int = 8,
         temperature: float = 1.0,
+        temperature_mode: str = 'fixed',
+        use_gumbel_softmax: bool = False,
+        min_temperature: float = 0.1,
+        # Annealing parameters (for 'annealed' mode)
+        anneal_warmup_epochs: int = 5,
+        anneal_factor: float = 0.98,
+        anneal_final_temp: float = 0.05,
     ):
         super().__init__()
         
@@ -424,7 +442,8 @@ class PhysicsTokenAttention(nn.Module):
         self.n_tokens = n_tokens
         self.n_heads = n_heads
         self.head_dim = dim // n_heads
-        self.temperature = temperature
+        self.temperature_mode = temperature_mode
+        self.use_gumbel_softmax = use_gumbel_softmax
         
         # Learnable physics tokens
         self.tokens = nn.Parameter(torch.randn(1, n_tokens, dim) * 0.02)
@@ -438,6 +457,18 @@ class PhysicsTokenAttention(nn.Module):
         
         # Deslice projection
         self.deslice_proj = nn.Linear(dim, dim)
+        
+        # Temperature mechanism
+        self.temperature_module = create_temperature_module(
+            mode=temperature_mode,
+            dim=dim,
+            n_heads=n_heads,
+            temperature=temperature,
+            min_temperature=min_temperature,
+            anneal_warmup_epochs=anneal_warmup_epochs,
+            anneal_factor=anneal_factor,
+            anneal_final_temp=anneal_final_temp,
+        )
     
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -460,7 +491,17 @@ class PhysicsTokenAttention(nn.Module):
         
         # Slice weights: [B, N, H*G] -> [B, H, N, G]
         slice_logits = self.slice_weight_proj(x).reshape(B, N, H, G).permute(0, 2, 1, 3)
-        slice_logits = slice_logits / self.temperature
+        
+        # Optional Gumbel-Softmax noise (applied before temperature scaling)
+        # Following Transolver++ Eq. 4: Rep-Slice(x, τ) = Softmax((Linear(x) - log(-log ε)) / τ)
+        if self.use_gumbel_softmax and self.training:
+            epsilon = torch.rand_like(slice_logits)
+            gumbel_noise = -torch.log(-torch.log(epsilon + 1e-10) + 1e-10)
+            slice_logits = slice_logits - gumbel_noise
+        
+        # Apply temperature mechanism
+        temperature, slice_logits = self.temperature_module(slice_logits, x)
+        
         slice_weights = torch.softmax(slice_logits, dim=-1)  # [B, H, N, G]
         
         # Content projection: [B, N, D] -> [B, N, D]
@@ -490,6 +531,11 @@ class PhysicsTokenAttention(nn.Module):
             out = out.squeeze(0)
         
         return out
+    
+    def set_epoch(self, epoch: int):
+        """Set current epoch for temperature annealing schedules."""
+        if hasattr(self.temperature_module, 'set_epoch'):
+            self.temperature_module.set_epoch(epoch)
 
 
 class TransformerBlock(nn.Module):
@@ -510,6 +556,14 @@ class TransformerBlock(nn.Module):
         max_distance: float = 10.0,
         num_position_buckets: int = 32,
         position_encoding_type: str = 'learned',
+        # Temperature parameters (only used when use_physics_tokens=True)
+        temperature: float = 1.0,
+        temperature_mode: str = 'fixed',
+        use_gumbel_softmax: bool = False,
+        min_temperature: float = 0.1,
+        anneal_warmup_epochs: int = 5,
+        anneal_factor: float = 0.98,
+        anneal_final_temp: float = 0.05,
     ):
         super().__init__()
         
@@ -518,7 +572,18 @@ class TransformerBlock(nn.Module):
         self.use_relative_positions = use_relative_positions
         
         if use_physics_tokens:
-            self.attn = PhysicsTokenAttention(dim, n_tokens, n_heads)
+            self.attn = PhysicsTokenAttention(
+                dim=dim,
+                n_tokens=n_tokens,
+                n_heads=n_heads,
+                temperature=temperature,
+                temperature_mode=temperature_mode,
+                use_gumbel_softmax=use_gumbel_softmax,
+                min_temperature=min_temperature,
+                anneal_warmup_epochs=anneal_warmup_epochs,
+                anneal_factor=anneal_factor,
+                anneal_final_temp=anneal_final_temp,
+            )
         else:
             self.attn = MultiHeadAttention(
                 dim, n_heads, dropout,
@@ -561,6 +626,11 @@ class TransformerBlock(nn.Module):
             x = x + self.attn(self.norm1(x))
         x = x + self.mlp(self.norm2(x))
         return x
+    
+    def set_epoch(self, epoch: int):
+        """Set current epoch for temperature annealing schedules."""
+        if self.use_physics_tokens and hasattr(self.attn, 'set_epoch'):
+            self.attn.set_epoch(epoch)
 
 
 class TransformerProcessor(nn.Module):
@@ -586,6 +656,14 @@ class TransformerProcessor(nn.Module):
         max_distance: float = 10.0,
         num_position_buckets: int = 32,
         position_encoding_type: str = 'learned',
+        # Temperature parameters (only used when use_physics_tokens=True)
+        temperature: float = 1.0,
+        temperature_mode: str = 'fixed',
+        use_gumbel_softmax: bool = False,
+        min_temperature: float = 0.1,
+        anneal_warmup_epochs: int = 5,
+        anneal_factor: float = 0.98,
+        anneal_final_temp: float = 0.05,
     ):
         super().__init__()
 
@@ -604,6 +682,13 @@ class TransformerProcessor(nn.Module):
                 max_distance=max_distance,
                 num_position_buckets=num_position_buckets,
                 position_encoding_type=position_encoding_type,
+                temperature=temperature,
+                temperature_mode=temperature_mode,
+                use_gumbel_softmax=use_gumbel_softmax,
+                min_temperature=min_temperature,
+                anneal_warmup_epochs=anneal_warmup_epochs,
+                anneal_factor=anneal_factor,
+                anneal_final_temp=anneal_final_temp,
             )
             for _ in range(n_layers)
         ])
@@ -641,3 +726,17 @@ class TransformerProcessor(nn.Module):
                 nodes = block(nodes, positions)
         
         return graph.replace(nodes=nodes)
+    
+    def set_epoch(self, epoch: int):
+        """
+        Set current epoch for temperature annealing schedules.
+        
+        Call this at the beginning of each training epoch when using
+        temperature_mode='annealed'.
+        
+        Args:
+            epoch: Current epoch number (0-indexed)
+        """
+        for block in self.blocks:
+            if hasattr(block, 'set_epoch'):
+                block.set_epoch(epoch)
