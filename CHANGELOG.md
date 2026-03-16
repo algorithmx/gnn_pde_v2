@@ -6,6 +6,18 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.8.1] - 2026-03-16 - Planned
+
+### TODO split `GraphTopology` from `GraphsTuple` 
+
+## [2.8.0] - 2026-03-16
+
+Jump to next version.
+
+## [2.7.6] - 2026-03-16
+
+### Added
+
 ## [2.7.5] - 2026-03-16
 
 ### Added
