@@ -17,6 +17,7 @@ from gnn_pde_v2.components import (
     GlobalGraphNetBlock, GlobalGraphNetProcessor,
     MLPDecoder, IndependentMLPDecoder,
     ProbeDecoder,
+    MultiHeadAttention, TransformerBlock, TransformerProcessor,
 )
 
 
@@ -416,3 +417,230 @@ class TestProbeDecoder:
         out = decoder(graph, query_positions)
 
         assert out.shape == (5, 3)
+
+
+class TestMultiHeadAttention:
+    """Test MultiHeadAttention with and without relative position encoding."""
+    
+    def test_forward_basic(self, device):
+        """Test basic forward pass without positions."""
+        attn = MultiHeadAttention(dim=64, n_heads=8, dropout=0.0).to(device)
+        x = torch.randn(10, 64, device=device)
+        
+        out = attn(x)
+        
+        assert out.shape == (10, 64)
+    
+    def test_forward_batched(self, device):
+        """Test batched forward pass."""
+        attn = MultiHeadAttention(dim=64, n_heads=8).to(device)
+        x = torch.randn(2, 10, 64, device=device)
+        
+        out = attn(x)
+        
+        assert out.shape == (2, 10, 64)
+    
+    def test_relative_positions_learned(self, device):
+        """Test relative position encoding with learned embeddings."""
+        attn = MultiHeadAttention(
+            dim=64,
+            n_heads=8,
+            use_relative_positions=True,
+            position_dim=2,
+            num_position_buckets=16,
+            position_encoding_type='learned',
+        ).to(device)
+        
+        x = torch.randn(10, 64, device=device)
+        positions = torch.randn(10, 2, device=device)
+        
+        out = attn(x, positions=positions)
+        
+        assert out.shape == (10, 64)
+    
+    def test_relative_positions_sinusoidal(self, device):
+        """Test relative position encoding with sinusoidal embeddings."""
+        attn = MultiHeadAttention(
+            dim=64,
+            n_heads=8,
+            use_relative_positions=True,
+            position_dim=2,
+            num_position_buckets=16,
+            position_encoding_type='sinusoidal',
+        ).to(device)
+        
+        x = torch.randn(10, 64, device=device)
+        positions = torch.randn(10, 2, device=device)
+        
+        out = attn(x, positions=positions)
+        
+        assert out.shape == (10, 64)
+    
+    def test_relative_positions_batched(self, device):
+        """Test relative position encoding with batched input."""
+        attn = MultiHeadAttention(
+            dim=64,
+            n_heads=8,
+            use_relative_positions=True,
+            position_dim=3,
+        ).to(device)
+        
+        x = torch.randn(2, 10, 64, device=device)
+        positions = torch.randn(2, 10, 3, device=device)
+        
+        out = attn(x, positions=positions)
+        
+        assert out.shape == (2, 10, 64)
+    
+    def test_relative_positions_missing_raises(self, device):
+        """Test that missing positions raises error when use_relative_positions=True."""
+        attn = MultiHeadAttention(
+            dim=64,
+            n_heads=8,
+            use_relative_positions=True,
+        ).to(device)
+        
+        x = torch.randn(10, 64, device=device)
+        
+        with pytest.raises(ValueError, match="positions must be provided"):
+            attn(x)
+    
+    def test_backward_compatibility(self, device):
+        """Test that old code without positions still works."""
+        attn = MultiHeadAttention(dim=64, n_heads=8).to(device)
+        x = torch.randn(10, 64, device=device)
+        
+        # Should work without positions parameter
+        out = attn(x)
+        assert out.shape == (10, 64)
+        
+        # Should also work with mask but no positions
+        mask = torch.ones(10, 10, device=device)
+        mask[0, 1] = 0
+        out = attn(x, mask=mask)
+        assert out.shape == (10, 64)
+    
+    def test_gradient_flow_learned(self, device):
+        """Test that gradients flow through learned position encoding."""
+        attn = MultiHeadAttention(
+            dim=64,
+            n_heads=8,
+            use_relative_positions=True,
+            position_encoding_type='learned',
+        ).to(device)
+        
+        x = torch.randn(5, 64, device=device, requires_grad=True)
+        positions = torch.randn(5, 2, device=device)
+        
+        out = attn(x, positions=positions)
+        loss = out.sum()
+        loss.backward()
+        
+        assert x.grad is not None
+        assert attn.position_encoding.position_bias.grad is not None
+
+
+class TestTransformerBlock:
+    """Test TransformerBlock with relative position encoding."""
+    
+    def test_forward_basic(self, device):
+        """Test basic forward pass."""
+        block = TransformerBlock(dim=64, n_heads=8).to(device)
+        x = torch.randn(10, 64, device=device)
+        
+        out = block(x)
+        
+        assert out.shape == (10, 64)
+    
+    def test_forward_with_positions(self, device):
+        """Test forward with relative position encoding."""
+        block = TransformerBlock(
+            dim=64,
+            n_heads=8,
+            use_relative_positions=True,
+            position_dim=2,
+        ).to(device)
+        
+        x = torch.randn(10, 64, device=device)
+        positions = torch.randn(10, 2, device=device)
+        
+        out = block(x, positions=positions)
+        
+        assert out.shape == (10, 64)
+
+
+class TestTransformerProcessor:
+    """Test TransformerProcessor with relative position encoding."""
+    
+    def test_forward_basic(self, device):
+        """Test basic forward pass without positions."""
+        processor = TransformerProcessor(
+            latent_dim=64,
+            n_layers=2,
+            n_heads=8,
+        ).to(device)
+        
+        graph = GraphsTuple(
+            nodes=torch.randn(10, 64, device=device),
+            n_node=torch.tensor([10], device=device),
+        )
+        
+        out = processor(graph)
+        
+        assert out.nodes.shape == (10, 64)
+    
+    def test_forward_with_positions(self, device):
+        """Test forward with relative position encoding."""
+        processor = TransformerProcessor(
+            latent_dim=64,
+            n_layers=2,
+            n_heads=8,
+            use_relative_positions=True,
+            position_dim=2,
+        ).to(device)
+        
+        graph = GraphsTuple(
+            nodes=torch.randn(10, 64, device=device),
+            positions=torch.randn(10, 2, device=device),
+            n_node=torch.tensor([10], device=device),
+        )
+        
+        out = processor(graph)
+        
+        assert out.nodes.shape == (10, 64)
+    
+    def test_missing_positions_raises(self, device):
+        """Test that missing positions raises error when use_relative_positions=True."""
+        processor = TransformerProcessor(
+            latent_dim=64,
+            n_layers=2,
+            use_relative_positions=True,
+        ).to(device)
+        
+        graph = GraphsTuple(
+            nodes=torch.randn(10, 64, device=device),
+            n_node=torch.tensor([10], device=device),
+        )
+        
+        with pytest.raises(ValueError, match="use_relative_positions=True but graph.positions is None"):
+            processor(graph)
+    
+    def test_batched_graphs_with_positions(self, device):
+        """Test with batched graphs and positions."""
+        processor = TransformerProcessor(
+            latent_dim=32,
+            n_layers=2,
+            n_heads=4,
+            use_relative_positions=True,
+            position_dim=2,
+        ).to(device)
+        
+        graph = GraphsTuple(
+            nodes=torch.randn(15, 32, device=device),
+            positions=torch.randn(15, 2, device=device),
+            n_node=torch.tensor([7, 8], device=device),
+        )
+        
+        out = processor(graph)
+        
+        assert out.nodes.shape == (15, 32)

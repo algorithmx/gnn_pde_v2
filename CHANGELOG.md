@@ -6,6 +6,27 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.7.1] - 2026-03-16
+
+### Added
+
+- **`components/transformer.py` — Relative Position Encoding (RPE)**:
+  - Added `RelativePositionEncoding` class with support for learned and sinusoidal
+    position embeddings based on pairwise spatial distances.
+  - Modified `MultiHeadAttention` to optionally use RPE via `use_relative_positions`
+    parameter, enabling spatially-aware attention for PDE applications.
+  - Updated `TransformerBlock` and `TransformerProcessor` to propagate positions
+    through the attention mechanism.
+  - Logarithmic distance bucketing for fine-grained local and coarse long-range
+    interactions (following T5/Transformer-XL style).
+
+- **`tests/test_components.py`** — Added comprehensive test coverage for RPE:
+  - `TestMultiHeadAttention`, `TestTransformerBlock`, `TestTransformerProcessor`
+    with tests for learned/sinusoidal encodings, batched inputs, gradient flow,
+    and backward compatibility.
+
+- **`examples/example_relative_position_attention.py`** — Usage examples for RPE.
+
 ## [2.7.0] - 2026-03-15
 
 New start.

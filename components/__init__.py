@@ -6,7 +6,8 @@ No magic, no registry - just standard PyTorch modules.
 
 Graph-based processors (work with GraphsTuple):
     - GraphNetBlock, GraphNetProcessor
-    - TransformerBlock, TransformerProcessor
+    - TransformerBlock, TransformerProcessor (with optional relative position encoding)
+    - MultiHeadAttention, PhysicsTokenAttention, RelativePositionEncoding
 
 Spectral/Grid-based processors (work with regular grid tensors):
     - FNOProcessor, SpectralConv, SeparableSpectralConv, SpectralConvBase
@@ -55,13 +56,14 @@ from .decoders import MLPDecoder, IndependentMLPDecoder
 from .probe import ProbeDecoder, ProbeMessagePassingLayer
 from .transformer import (
     TransformerBlock, TransformerProcessor, MultiHeadAttention, PhysicsTokenAttention,
-    # Conditioning (defined in core/protocols, re-exported through transformer)
-    Modulation, ConditioningProtocol,
+    RelativePositionEncoding,
     ZeroConditioning, AdaLNConditioning, DualAdaLNConditioning, FiLMConditioning,
 )
 from .spectral import FNOProcessor, SpectralConv, SeparableSpectralConv, SpectralConvBase, make_spectral_conv, FNOBlock, AFNOBlock
 
-# Structural protocols — also available from gnn_pde_v2.core
+# Structural protocols — re-exported here for convenience since they describe
+# component contracts. Conditioning types (Modulation, ConditioningProtocol)
+# are NOT re-exported; import them directly from gnn_pde_v2.core.protocols.
 from ..core.protocols import (
     GraphEncoder,
     GraphProcessor,
@@ -88,6 +90,7 @@ __all__ = [
     "TransformerProcessor",
     "MultiHeadAttention",
     "PhysicsTokenAttention",
+    "RelativePositionEncoding",
     "FNOProcessor",
     "SpectralConv",
     "SeparableSpectralConv",
@@ -100,9 +103,7 @@ __all__ = [
     "IndependentMLPDecoder",
     "ProbeDecoder",
     "ProbeMessagePassingLayer",
-    # Conditioning
-    "Modulation",
-    "ConditioningProtocol",
+    # Conditioning (Modulation & ConditioningProtocol live in gnn_pde_v2.core.protocols)
     "ZeroConditioning",
     "AdaLNConditioning",
     "DualAdaLNConditioning",

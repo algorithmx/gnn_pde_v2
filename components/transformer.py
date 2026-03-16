@@ -11,19 +11,158 @@ from torch import Tensor
 import torch
 import torch.nn as nn
 import math
+import numpy as np
+from torch.utils.checkpoint import checkpoint
 
 from ..core.mlp import MLP
 from ..core.graph import GraphsTuple
-from ..core.protocols import Modulation, ConditioningProtocol  # re-exported for backwards compat
+from ..core.protocols import Modulation, ConditioningProtocol
+
+
+# =============================================================================
+# Relative Position Encoding
+# =============================================================================
+
+def _get_position_bucket(distance: torch.Tensor, num_buckets: int, max_distance: float) -> torch.Tensor:
+    """
+    Map continuous distances to discrete buckets using logarithmic bucketing.
+    
+    This follows the T5/Transformer-XL style bucketing where:
+    - Bucket 0: distance in [0, 1)
+    - Bucket 1: distance in [1, 2)
+    - Bucket 2: distance in [2, 4)
+    - Bucket 3: distance in [4, 8)
+    - etc.
+    
+    This allows fine-grained local interactions and coarse long-range interactions.
+    
+    Args:
+        distance: [..., N, N] pairwise distances
+        num_buckets: Number of discrete buckets
+        max_distance: Maximum distance to consider
+        
+    Returns:
+        [..., N, N] bucket indices (0 to num_buckets-1)
+    """
+    # Clip distance to max_distance
+    distance = distance.clamp(max=max_distance)
+    
+    # Bucket 0 is reserved for exact matches (distance < 1)
+    # For distance >= 1, use logarithmic bucketing
+    log_distance = torch.log(distance + 1e-8) / math.log(max_distance + 1e-8)
+    log_buckets = torch.floor(log_distance * (num_buckets - 1))
+    
+    # Distance < 1 goes to bucket 0, distance >= 1 uses log buckets starting from 1
+    buckets = torch.where(distance < 1.0, torch.zeros_like(distance), log_buckets + 1)
+    
+    # Clamp to valid range
+    buckets = buckets.clamp(0, num_buckets - 1).long()
+    
+    return buckets
+
+
+class RelativePositionEncoding(nn.Module):
+    """
+    Relative position encoding for attention mechanisms.
+    
+    Computes learnable or sinusoidal position biases based on pairwise distances
+    between node positions. These biases are added to attention scores before
+    softmax, allowing the model to attend based on spatial relationships.
+    
+    Reference:
+        - T5: "Exploring the Limits of Transfer Learning with a Unified Text-to-Text Transformer"
+        - Graph Transformer with positional encoding variants
+    
+    Args:
+        num_heads: Number of attention heads
+        num_buckets: Number of distance buckets
+        position_dim: Dimension of position vectors (2 for 2D, 3 for 3D, etc.)
+        max_distance: Maximum distance to consider
+        encoding_type: 'learned' or 'sinusoidal'
+    """
+    
+    def __init__(
+        self,
+        num_heads: int,
+        num_buckets: int = 32,
+        position_dim: int = 2,
+        max_distance: float = 10.0,
+        encoding_type: str = 'learned',
+    ):
+        super().__init__()
+        
+        self.num_heads = num_heads
+        self.num_buckets = num_buckets
+        self.position_dim = position_dim
+        self.max_distance = max_distance
+        self.encoding_type = encoding_type
+        
+        if encoding_type == 'learned':
+            # Learnable bias per head per bucket
+            self.position_bias = nn.Parameter(torch.randn(num_heads, num_buckets) * 0.02)
+        elif encoding_type == 'sinusoidal':
+            # Fixed sinusoidal encodings
+            self._init_sinusoidal_encodings()
+        else:
+            raise ValueError(f"Unknown encoding_type: {encoding_type}. Use 'learned' or 'sinusoidal'.")
+    
+    def _init_sinusoidal_encodings(self):
+        """Initialize sinusoidal position encodings."""
+        # Create sinusoidal encodings for each bucket
+        position = torch.arange(self.num_buckets).unsqueeze(1).float()
+        div_term = torch.exp(torch.arange(0, self.num_heads, 2).float() * 
+                            (-math.log(10000.0) / self.num_heads))
+        
+        encodings = torch.zeros(self.num_heads, self.num_buckets)
+        encodings[0::2, :] = torch.sin(position * div_term.unsqueeze(1)).T
+        if self.num_heads > 1:
+            encodings[1::2, :] = torch.cos(position * div_term.unsqueeze(1)).T
+        
+        self.register_buffer('sinusoidal_encodings', encodings)
+    
+    def forward(self, positions: torch.Tensor) -> torch.Tensor:
+        """
+        Compute relative position bias from node positions.
+        
+        Args:
+            positions: [B, N, position_dim] or [N, position_dim] - Node positions
+            
+        Returns:
+            [B, num_heads, N, N] or [num_heads, N, N] position bias
+        """
+        single_batch = False
+        if positions.dim() == 2:
+            positions = positions.unsqueeze(0)
+            single_batch = True
+        
+        # Compute pairwise distances: [B, N, N]
+        # dist[i, j] = ||pos[i] - pos[j]||
+        diff = positions.unsqueeze(2) - positions.unsqueeze(1)  # [B, N, N, position_dim]
+        distance = torch.norm(diff, dim=-1)  # [B, N, N]
+        
+        # Map distances to buckets: [B, N, N]
+        buckets = _get_position_bucket(distance, self.num_buckets, self.max_distance)
+        
+        # Get bias for each bucket
+        if self.encoding_type == 'learned':
+            # [num_heads, num_buckets] -> gather -> [B, num_heads, N, N]
+            bias = self.position_bias[:, buckets]  # [num_heads, B, N, N]
+            bias = bias.permute(1, 0, 2, 3)  # [B, num_heads, N, N]
+        else:  # sinusoidal
+            bias = self.sinusoidal_encodings[:, buckets]  # [num_heads, B, N, N]
+            bias = bias.permute(1, 0, 2, 3)  # [B, num_heads, N, N]
+        
+        if single_batch:
+            bias = bias.squeeze(0)  # [num_heads, N, N]
+        
+        return bias
 
 
 # =============================================================================
 # Conditioning Protocol
 # =============================================================================
-# Modulation and ConditioningProtocol are defined in core/protocols.py and
-# imported above. They are re-exported here so that existing code that does
-# ``from gnn_pde_v2.components.transformer import ConditioningProtocol``
-# continues to work without modification.
+# Modulation and ConditioningProtocol are defined in core/protocols.py.
+# Import them from there: ``from gnn_pde_v2.core.protocols import ConditioningProtocol``
 
 
 class ZeroConditioning(ConditioningProtocol[object]):
@@ -152,9 +291,35 @@ def _apply_modulation(x: Tensor, mod: Modulation) -> Tensor:
 # =============================================================================
 
 class MultiHeadAttention(nn.Module):
-    """Standard multi-head self-attention."""
+    """
+    Multi-head self-attention with optional relative position encoding.
     
-    def __init__(self, dim: int, n_heads: int = 8, dropout: float = 0.0):
+    For PDE applications, relative position encoding allows the model to attend
+    based on spatial relationships between nodes. Position biases are computed
+    from pairwise distances and added to attention scores before softmax.
+    
+    Args:
+        dim: Model dimension
+        n_heads: Number of attention heads
+        dropout: Dropout rate
+        use_relative_positions: Whether to use relative position encoding
+        position_dim: Dimension of position vectors (2 for 2D, 3 for 3D)
+        max_distance: Maximum distance to consider for position encoding
+        num_position_buckets: Number of discrete distance buckets
+        position_encoding_type: 'learned' or 'sinusoidal'
+    """
+    
+    def __init__(
+        self,
+        dim: int,
+        n_heads: int = 8,
+        dropout: float = 0.0,
+        use_relative_positions: bool = False,
+        position_dim: int = 2,
+        max_distance: float = 10.0,
+        num_position_buckets: int = 32,
+        position_encoding_type: str = 'learned',
+    ):
         super().__init__()
         assert dim % n_heads == 0
         
@@ -162,21 +327,46 @@ class MultiHeadAttention(nn.Module):
         self.n_heads = n_heads
         self.head_dim = dim // n_heads
         self.scale = math.sqrt(self.head_dim)
+        self.use_relative_positions = use_relative_positions
         
         self.qkv = nn.Linear(dim, 3 * dim)
         self.out_proj = nn.Linear(dim, dim)
         self.dropout = nn.Dropout(dropout)
         
-    def forward(self, x: torch.Tensor, mask: Optional[torch.Tensor] = None):
+        # Relative position encoding
+        if use_relative_positions:
+            self.position_encoding = RelativePositionEncoding(
+                num_heads=n_heads,
+                num_buckets=num_position_buckets,
+                position_dim=position_dim,
+                max_distance=max_distance,
+                encoding_type=position_encoding_type,
+            )
+        else:
+            self.position_encoding = None
+        
+    def forward(
+        self,
+        x: torch.Tensor,
+        mask: Optional[torch.Tensor] = None,
+        positions: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """
         Args:
-            x: [B, N, D] or [N, D]
-            mask: Optional attention mask
+            x: [B, N, D] or [N, D] - Input features
+            mask: Optional attention mask [B, N, N] or [N, N]
+            positions: [B, N, position_dim] or [N, position_dim] - Node positions
+                      Required if use_relative_positions=True
+                      
+        Returns:
+            [B, N, D] or [N, D] - Output features
         """
         single_batch = False
         if x.dim() == 2:
             x = x.unsqueeze(0)
             single_batch = True
+            if positions is not None and positions.dim() == 2:
+                positions = positions.unsqueeze(0)
         
         B, N, D = x.shape
         
@@ -186,6 +376,17 @@ class MultiHeadAttention(nn.Module):
         
         # Attention scores
         scores = (q @ k.transpose(-2, -1)) / self.scale  # [B, H, N, N]
+        
+        # Add relative position bias if enabled
+        if self.use_relative_positions:
+            if positions is None:
+                raise ValueError(
+                    "positions must be provided when use_relative_positions=True"
+                )
+            position_bias = self.position_encoding(positions)  # [B, H, N, N] or [H, N, N]
+            if position_bias.dim() == 3:
+                position_bias = position_bias.unsqueeze(0)  # [1, H, N, N]
+            scores = scores + position_bias
         
         if mask is not None:
             scores = scores.masked_fill(mask == 0, float('-inf'))
@@ -293,7 +494,7 @@ class PhysicsTokenAttention(nn.Module):
 
 class TransformerBlock(nn.Module):
     """
-    Transformer block with optional physics token attention.
+    Transformer block with optional physics token attention and relative position encoding.
     """
     
     def __init__(
@@ -304,15 +505,29 @@ class TransformerBlock(nn.Module):
         dropout: float = 0.0,
         use_physics_tokens: bool = False,
         n_tokens: int = 32,
+        use_relative_positions: bool = False,
+        position_dim: int = 2,
+        max_distance: float = 10.0,
+        num_position_buckets: int = 32,
+        position_encoding_type: str = 'learned',
     ):
         super().__init__()
         
         self.norm1 = nn.LayerNorm(dim)
+        self.use_physics_tokens = use_physics_tokens
+        self.use_relative_positions = use_relative_positions
         
         if use_physics_tokens:
             self.attn = PhysicsTokenAttention(dim, n_tokens, n_heads)
         else:
-            self.attn = MultiHeadAttention(dim, n_heads, dropout)
+            self.attn = MultiHeadAttention(
+                dim, n_heads, dropout,
+                use_relative_positions=use_relative_positions,
+                position_dim=position_dim,
+                max_distance=max_distance,
+                num_position_buckets=num_position_buckets,
+                position_encoding_type=position_encoding_type,
+            )
         
         self.norm2 = nn.LayerNorm(dim)
 
@@ -329,12 +544,21 @@ class TransformerBlock(nn.Module):
             use_layer_norm=False,
         )
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        positions: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """
         Args:
-            x: [N, D] or [B, N, D]
+            x: [N, D] or [B, N, D] - Input features
+            positions: [N, position_dim] or [B, N, position_dim] - Node positions
+                      Required if use_relative_positions=True
         """
-        x = x + self.attn(self.norm1(x))
+        if self.use_relative_positions and not self.use_physics_tokens:
+            x = x + self.attn(self.norm1(x), positions=positions)
+        else:
+            x = x + self.attn(self.norm1(x))
         x = x + self.mlp(self.norm2(x))
         return x
 
@@ -344,6 +568,7 @@ class TransformerProcessor(nn.Module):
     Transformer-based processor for graph nodes.
 
     Can use full attention or physics-token attention for efficiency.
+    Supports relative position encoding when graph.positions is available.
     """
 
     def __init__(
@@ -355,9 +580,17 @@ class TransformerProcessor(nn.Module):
         dropout: float = 0.0,
         use_physics_tokens: bool = False,
         n_tokens: int = 32,
+        use_checkpoint: bool = False,
+        use_relative_positions: bool = False,
+        position_dim: int = 2,
+        max_distance: float = 10.0,
+        num_position_buckets: int = 32,
+        position_encoding_type: str = 'learned',
     ):
         super().__init__()
 
+        self.use_checkpoint = use_checkpoint
+        self.use_relative_positions = use_relative_positions
         self.blocks = nn.ModuleList([
             TransformerBlock(
                 dim=latent_dim,
@@ -366,6 +599,11 @@ class TransformerProcessor(nn.Module):
                 dropout=dropout,
                 use_physics_tokens=use_physics_tokens,
                 n_tokens=n_tokens,
+                use_relative_positions=use_relative_positions,
+                position_dim=position_dim,
+                max_distance=max_distance,
+                num_position_buckets=num_position_buckets,
+                position_encoding_type=position_encoding_type,
             )
             for _ in range(n_layers)
         ])
@@ -373,14 +611,33 @@ class TransformerProcessor(nn.Module):
         self.use_physics_tokens = use_physics_tokens
     
     def forward(self, graph: GraphsTuple) -> GraphsTuple:
-        """Process nodes through transformer blocks."""
+        """
+        Process nodes through transformer blocks.
+        
+        Args:
+            graph: GraphsTuple with nodes and optionally positions
+            
+        Returns:
+            GraphsTuple with updated nodes
+        """
         if graph.nodes is None:
             raise ValueError("Graph must have nodes for TransformerProcessor")
         
         nodes = graph.nodes
+        positions = graph.positions if self.use_relative_positions else None
+        
+        # Check if positions are required but not provided
+        if self.use_relative_positions and positions is None:
+            raise ValueError(
+                "use_relative_positions=True but graph.positions is None. "
+                "Please provide positions in the GraphsTuple."
+            )
         
         # Process through transformer blocks
         for block in self.blocks:
-            nodes = block(nodes)
+            if self.use_checkpoint:
+                nodes = checkpoint(block, nodes, positions, use_reentrant=False)
+            else:
+                nodes = block(nodes, positions)
         
         return graph.replace(nodes=nodes)
