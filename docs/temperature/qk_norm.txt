@@ -1,0 +1,940 @@
+Query-Key Normalization for Transformers
+
+Alex Henry, Prudhvi Raj Dachapally, Shubham Pawar, Yuxuan Chen
+Cyndx Technologies
+{alex.henry,prudhvi.dachapally,shubham.pawar,ethan.chen}@cyndx.com
+
+Abstract
+
+Low-resource language translation is a chal-
+lenging but socially valuable NLP task. Build-
+ing on recent work adapting the Transformer’s
+normalization to this setting, we propose
+QKNORM, a normalization technique that
+modiﬁes the attention mechanism to make the
+softmax function less prone to arbitrary satu-
+ration without sacriﬁcing expressivity. Specif-
+ically, we apply (cid:96)2 normalization along the
+head dimension of each query and key ma-
+trix prior to multiplying them and then scale
+up by a learnable parameter instead of di-
+viding by the square root of the embedding
+dimension. We show improvements averag-
+ing 0.928 BLEU over state-of-the-art bilin-
+gual benchmarks for 5 low-resource transla-
+tion pairs from the TED Talks corpus and
+IWSLT’15.1
+
+1
+
+Introduction
+
+The Transformer (Vaswani et al., 2017) remains
+the architecture of choice for machine translation.
+Since its introduction, various architectural and
+functional modiﬁcations have been made to im-
+prove its performance on NMT datasets (Ahmed
+et al., 2017; Zhang et al., 2018; Wang et al., 2019;
+Dai et al., 2019; Zhao et al., 2019). Translating
+low-resource languages presents special challenges.
+Recent strategies for adapting Transformers to this
+socially valuable task include exploiting transfer
+learning with many-to-many multilingual models
+(Aharoni et al., 2019), reducing model depth (van
+Biljon et al., 2020), and adding a regularization
+penalty for diverging from the predictions of a
+monolingual language model pretrained on the tar-
+get language (Baziotis et al., 2020). This paper
+builds on recent work on layer normalization for
+
+1Code to reproduce our experiments is available at https:
+
+//github.com/CyndxAI/QKNorm
+
+low-resource language pairs, introducing a normal-
+ization technique that tries to keep the input to
+softmax attention within an appropriate range.
+
+Layer normalization. For Transformers and
+other NLP models, layer normalization (Ba et al.,
+2016) yields signiﬁcantly better performance than
+batch normalization (Ioffe and Szegedy, 2015), in
+part because NLP models tend to exhibit greater
+variance in batch statistics during training, for ex-
+ample compared to computer vision (Shen et al.,
+2020). Layer normalization boosts performance in
+deeper networks chieﬂy by controlling their gradi-
+ents (Xu et al., 2019). It re-scales and re-centers
+activation distributions (though re-centering may
+be unnecessary, see Zhang and Sennrich 2019).
+The type of normalization used and the placement
+of that normalization within the Transformer are
+both crucial to Transformer performance (Nguyen
+and Salazar, 2019).
+
+Softmax attention. Given a matrix X embed-
+ding a sequence of tokens, attention transforms
+each embedding into a mixture of itself and other
+elements of the sequence according to the impor-
+tance of their connections for the modeling task at
+hand. In the case of multihead self-attention, the
+vectors of X are projected linearly into Query, Key
+and Value matrices. The operation
+
+softmax(QKT )
+
+(1)
+
+deﬁnes a distribution for each token over all the oth-
+ers in its sequence that sums to 1. Multiplying by
+V then yields a new matrix where the embedding
+of each token is a weighted average of the vectors
+in V .
+
+Richter and Wattenhofer (2020) propose replac-
+ing the softmax function in attention because it con-
+strains attention’s output to the convex hull spanned
+by the vectors in V , limiting model ﬂexibility. For
+
+FindingsoftheAssociationforComputationalLinguistics:EMNLP2020,pages4246–4253November16-20,2020.c(cid:13)2020AssociationforComputationalLinguistics4246the softmax over the vocabulary in next word pre-
+diction, Demeter et al. (2020) ﬁnd that the norms
+of word embeddings drown out their angular dis-
+placements, with the consequence that words with
+smaller norms are systematically less likely to be
+predicted.
+
+In this work, we replace the dot product inside
+of softmax attention with cosine similarity scaled
+up by a learnable parameter. This technique yields
+improved performance in low-resource bilingual
+translation, which we conjecture is because it binds
+QKT to a narrower range in a way that makes
+it easier to learn more diffuse attention patterns
+wherever these prove valuable.
+
+2 Background
+
+Nguyen and Salazar (2019) achieve state-of-the-art
+bilingual performance on 5 low-resource transla-
+tion pairs from the TED Talks (Qi et al., 2018)
+and IWSLT’15 (Cettolo et al., 2015) corpora. This
+work builds directly on theirs, applying our tech-
+nique to the same 5 benchmarks. Their model
+combines three normalization techniques that we
+describe below: FIXNORM (Nguyen and Chiang,
+2018), PRENORM (Klein et al., 2017; Domhan,
+2018; Vaswani et al., 2018; Chen et al., 2018), and
+SCALENORM, which they introduce as a replace-
+ment for layer normalization. They report that each
+technique contributes about 0.3 BLEU for an aver-
+age improvement of 1.1 BLEU across the test sets
+for their 5 language pairs.
+
+FIXNORM sets word embeddings to unit length,
+which aids rare word translation (Nguyen and Chi-
+ang, 2018). PRENORM simply changes the location
+of layer normalization within the Transformer ar-
+chitecture, applying it to the input to each sublayer
+instead of after the residual connection. Moving
+layer normalization ahead of the residual connec-
+tion enhances stability because the residual path
+is allowed to stay an identity map, instead of con-
+tributing terms to the gradient that could cause it
+to explode or vanish (Wang et al., 2019; Nguyen
+and Salazar, 2019).
+Interestingly, Nguyen and
+Salazar (2019) ﬁnd PRENORM to be superior in
+low-resource but not high-resource translation set-
+tings.
+
+Lastly, SCALENORM replaces layer normaliza-
+tion with (cid:96)2 normalization along the embedding
+dimension, multiplied by a learnable scalar param-
+eter initialized with 1√
+(where d is the embedding
+d
+dimension; the same term is used in scaled dot
+
+product attention (Vaswani et al., 2017)).
+
+In other words, SCALENORM applies (cid:96)2 normal-
+ization along the embedding dimension of Q, K
+and V , and it does so before the input to multihead
+attention gets split into heads.
+
+Building on their work, we combine FIXNORM,
+PRENORM,
+and vanilla layer normalization
+(LAYERNORM) with a new technique we call
+query-key normalization (QKNORM), surpassing
+their model’s performance on each of the same 5
+translation pairs by an average of 0.928 test BLEU.
+QKNORM applies (cid:96)2 normalization to Q and
+K only, and it does so along the head dimension
+(which is the same dimension as the embedding di-
+mension, but after multihead attention has split its
+input into separate heads). Q and K thus become
+ˆQ and ˆK, where the ith row vector of ˆQ (the ith
+embedding in the sequence) is given by:
+
+ˆqi =
+
+qi
+||qi||
+
+(2)
+
+The effect is to make each element of QKT the co-
+sine similarity of the corresponding pair of contex-
+tual token representations instead of their dot prod-
+uct. This is similar to Luo et al. (2018), who pro-
+pose replacing the dot product in fully-connected
+networks between layer weights and previous layer
+outputs with cosine similarity.
+
+Like SCALENORM, we also multiply by a learn-
+able parameter that we initialize according to a rule
+of thumb we describe below. Unlike SCALENORM,
+QKNORM complements LAYERNORM rather than
+replacing it.
+
+3 Dot Products and the Softmax
+
+Function
+
+Softmax attends only to the differences between
+values. For example,
+
+softmax([760, 752, 750])
+softmax([12, 4, 2])
+
+=
+
+= [0.99962, 0.00034, 0.00005].
+
+Since the dot product is unbounded, differences
+between elements that may be insigniﬁcantly small
+on a relative basis can silence all other signals in
+the attention weights applied to V . We conjecture
+that this limits the complexity of the patterns that
+attention heads can learn.
+
+The impact is more obvious in less sophisticated
+Transformer implementations (perhaps in part be-
+cause subsequent advances have mitigated the same
+
+4247Figure 1: Scaled Dot Product Attention. Self-attention heatmaps for 4 heads from one encoder layer displaying
+more “concentrated” attention, consistent with the conjecture that unnormalized dot products in QK T saturate the
+softmax and limit the attention patterns that can be learned.
+
+Figure 2: Query-Key Normalized Attention. Self-attention heatmaps of the same 4 heads in Figure 1. QKNORM
+enables more diffuse attention patterns.
+
+issue in different ways). Figures 1 and 2 show a
+heatmap comparison of encoder weights trained
+using the code for The Annotated Transformer2,
+the ﬁrst with scaled dot product attention and the
+second with QKNORM.
+
+The models containing these encoders were
+trained for 10 epochs on IWSLT 2016 de→en
+(Cettolo et al., 2016) using the Annotated Trans-
+former implementation, with the baseline model
+scoring 19.4 BLEU and the QKNORM model scor-
+ing 24.33 BLEU on the test set, computed with the
+SacreBLEU Python package (Post, 2018).
+
+Though this heatmap comparison is obviously
+not systematic, we think the visual at least pro-
+vides a plausible intuition for the incremental gain
+this technique achieves, with scaled dot product
+attention exhibiting the kind of “winner-take-all”
+behavior we would expect from a softmax near
+saturation.
+
+In comparison to dot products, cosine similari-
+ties are bounded by [−1, 1] which creates the oppo-
+site problem as input to softmax – the differences
+
+2https://nlp.seas.harvard.edu/2018/04/
+
+03/attention.html
+
+between values are too small for softmax to let
+the model effectively ignore connections between
+words it should not attend to. Instead of dividing by
+√
+d as in scaled dot product attention we scale up
+using a learnable parameter that we initialize with
+a value that depends on the length of the sequences
+in the training data (and hence on the number of
+elements in QKT ):
+
+g0 = log2(L2 − L)
+
+(3)
+
+where L is the 97.5th percentile sequence length
+across all training data sequences for source and
+target.
+
+The attention operation thus changes from
+
+softmax(
+
+QKT
+√
+d
+
+)V
+
+(4)
+
+to
+
+softmax(g ∗ ˆQ ˆKT )V
+(5)
+where ˆQ and ˆK are Q and K with (cid:96)2-normalization
+applied along their head dimensions and g is a
+learnable scalar parameter initialized with g0 as
+computed in (3).
+
+4248Examples
+
+gl→en
+sk→en
+en→vi
+en→he
+ar→en
+
+10k
+61k
+133k
+212k
+214k
+
+Source + Target Tokens Number of Parameters Training Time (in hours) Development BLEU GPU L
+79
+75
+72
+72
+75
+
+31,051,880
+48,356,907
+48,431,538
+48,401,538
+48,499,512
+
+0.37M
+2.32M
+5.99M
+7.88M
+8.09M
+
+23.45
+31.34
+28.77
+31.16
+37.94
+
+T4
+T4
+T4
+T4
+P100
+
+6
+11
+19
+38
+26
+
+Table 1: Summary of data and model training information. Number of examples and number of tokens taken
+directly from Nguyen and Salazar (2019). L is the 97.5th percentile sequence length across all training data
+sequences.
+
+en→vi
+Nguyen and Salazar (2019)
+32.79
+QKNORM + LAYERNORM 33.24
+
+ar→en
+36.09
+36.75
+
+en→he
+28.28
+28.96
+
+gl→en
+22.01
+24.21
+
+sk→en
+32.58
+33.23
+
+Table 2: Comparison of test BLEU (Papineni et al., 2002), scored using the Moses toolkit scripts provided in the
+repo for Nguyen and Salazar (2019). p < 0.01 using bootstrap resampling (Koehn, 2004). Both architectures use
+PRENORM and FIXNORM. The Nguyen and Salazar (2019) architecture uses SCALENORM where we instead use
+vanilla layer normalization (Ba et al., 2016), and scaled dot product attention where we use QKNORM.
+
+4 Experiments and Results
+
+We follow the implementation in the repository
+for Nguyen and Salazar (2019), both in replicating
+their performance and as a starting point for our
+version (and also for computing BLEU as reported
+in Table 2).3 We train on the same 5 low-resource
+translation pairs as Nguyen and Salazar (2019):
+4 from the TED Talks corpus (Qi et al., 2018)4 –
+Arabic, Slovak, and Galician translated to English,
+and English translated to Hebrew – and 1 from the
+IWSLT’15 corpus (Cettolo et al., 2015), English
+to Vietnamese. The repository for Nguyen and
+Salazar (2019) provides the tokenized text they
+used for English to Vietnamese.
+
+Tokenization and BLEU. Apart from BPE (Sen-
+nrich et al., 2016), their repository does not include
+the code they used for tokenization, so for the other
+4 language pairs we used the tokenization script
+from the repository for Qi et al. (2018).5
+
+two Moses6
+scripts
+multi-bleu.perl
+
+The repository for Nguyen and Salazar
+for
+(2019)
+includes
+scoring BLEU,
+and
+multi-bleu-detok.perl. We can’t use
+multi-bleu.perl for the 4 TED Talks pairs
+without being able to replicate their tokenization
+because scores from that script are not comparable
+
+3https://github.com/tnq177/
+
+Transformers_without_tears
+
+4http://phontron.com/data/ted_talks.
+
+tar.gz
+
+5https://github.com/neulab/
+
+word-embeddings-for-nmt/blob/master/
+ted_reader.py
+
+6https://github.com/moses-smt/
+
+mosesdecoder
+
+when there are differences in tokenization, unlike
+multi-bleu-detok.perl (Post, 2018). We
+use multi-bleu.perl to score en→vi (since
+we have their preprocessed text for this pair) and
+multi-bleu-detok.perl to score the 4
+TED Talks pairs.
+
+we
+
+For
+
+after
+
+(Bird
+
+additional
+
+conﬁrmation,
+
+also
+score all models using SacreBLEU (Post,
+detokenizing with NLTK’s
+2018)
+TreebankWordDetokenizer
+and
+Loper, 2004). These scores are reported in Table 3.
+All the detokenized BLEU scores from Table
+2 are basically unchanged in Table 3, with the
+exception of en→vi. The best scores for the
+baseline model we could get on en→vi were 32.48
+for Moses multi-bleu.perl and 32.41 for
+SacreBLEU, though in Table 2 we report the
+multi-bleu.perl score from Nguyen and
+Salazar (2019), 32.79. Our model’s score for the
+same pair comes in 0.06 BLEU lower as well.
+
+Following the Nguyen and Salazar (2019) repos-
+itory, we perform BPE using fastBPE7. We also
+use the same Moses code for bootstrap resampling
+(Koehn, 2004).
+
+Model hyperparameters. Although PRENORM
+has been shown to make warmup less important
+for Transformers using scaled dot product attention
+(Nguyen and Salazar, 2019; Xiong et al., 2020), we
+obtained our best results using 8,000 steps of linear
+warmup. How much linear warmup matters for
+QKNORM and why it matters are both subjects for
+further investigation. We used the same validation-
+
+7https://github.com/glample/fastBPE
+
+4249en→vi
+32.41
+Nguyen and Salazar (2019)
+QKNORM + LAYERNORM 33.18
+
+ar→en
+36.09
+36.75
+
+en→he
+28.28
+28.96
+
+gl→en
+22.01
+24.21
+
+sk→en
+32.58
+33.22
+
+Table 3: Comparison of test BLEU (Papineni et al., 2002), scored using SACREBLEU (Post, 2018).
+
+based decay scheme as Nguyen and Salazar (2019)
+and allowed models to train until they had reached
+the minimum learning rate. For all other model
+hyperparameters and preprocessing settings we fol-
+lowed Nguyen and Salazar (2019) and the code in
+the lead author’s GitHub repository. As in their
+repository, we calculate test BLEU on the trans-
+lation from the epoch with the highest validation
+BLEU.
+
+Results.
+Incorporating QKNORM and using
+layer normalization instead of SCALENORM
+boosted performance by an average of 0.928 BLEU
+across the test sets for the 5 translation pairs. On
+IWSLT’15 en→vi, our SacreBLEU test score of
+33.18 is only 0.09 BLEU lower than Provilkov et al.
+(2020), who use BPE-dropout to increase BLEU
+1.49 over the same model with vanilla BPE.
+
+5 Conclusion
+
+In this paper, we introduced a normalization tech-
+nique that modiﬁes the attention mechanism in
+Transformers and demonstrated its utility for low-
+resource bilingual translation by building it into
+an existing Transformer implementation with state-
+of-the-art performance on 5 low-resource language
+pairs. QKNORM improves performance for each of
+the 5 pairs, with an average test BLEU increase of
+0.928. We pointed to possible explanations for its
+effectiveness but identifying exactly where it helps
+and why requires further research. First, we plan to
+combine our approach with the fairseq Transformer
+implementation (Ott et al., 2019) and apply it to the
+FLORES dataset (Guzm´an et al., 2019), investigat-
+ing the effect of QKNORM on the optimal depth,
+number of attention heads, and warmup schedule
+for low-resource translation, in combination with
+recent advances like BPE-dropout (Provilkov et al.,
+2020). Next, we plan to look at high-resource set-
+tings to see whether the beneﬁts of query-key nor-
+malization dissipate with access to more training
+data. Lastly, we intend to study how QKNORM
+impacts what attention heads actually learn, adapt-
+ing methods from BERT attention studies such as
+Clark et al. (2019).
+
+Acknowledgments
+
+The authors would like to thank the reviewers for
+their valuable and insightful comments, and Toan
+Q. Nguyen for helpful clariﬁcations and sugges-
+tions along the way.
+
+References
+
+Roee Aharoni, Melvin Johnson, and Orhan Firat. 2019.
+Massively multilingual neural machine translation.
+In Proceedings of the 2019 Conference of the North
+American Chapter of the Association for Compu-
+tational Linguistics: Human Language Technolo-
+gies, Volume 1 (Long and Short Papers), pages
+3874–3884, Minneapolis, Minnesota. Association
+for Computational Linguistics.
+
+Karim Ahmed, Nitish Shirish Keskar, and Richard
+Socher. 2017. Weighted transformer network for
+machine translation.
+
+Jimmy Lei Ba, Jamie Ryan Kiros, and Geoffrey E. Hin-
+
+ton. 2016. Layer normalization.
+
+Christos Baziotis, Barry Haddow, and Alexandra Birch.
+2020. Language model prior for low-resource neu-
+ral machine translation.
+
+Elan van Biljon, Arnu Pretorius, and Julia Kreutzer.
+transformer depth for low-
+
+On optimal
+2020.
+resource language translation.
+
+Steven Bird and Edward Loper. 2004. NLTK: The nat-
+ural language toolkit. In Proceedings of the ACL In-
+teractive Poster and Demonstration Sessions, pages
+214–217, Barcelona, Spain. Association for Compu-
+tational Linguistics.
+
+M. Cettolo, Niehues Jan, St¨uker Sebastian, L. Ben-
+tivogli, R. Cattoni, and M. Federico. 2016. The iwslt
+2016 evaluation campaign.
+
+M. Cettolo, J. Niehues, S. St¨uker, L. Bentivogli, R. Cat-
+toni, and M. Federico. 2015. The iwslt 2015 evalua-
+tion campaign.
+
+Mia Xu Chen, Orhan Firat, Ankur Bapna, Melvin
+Johnson, Wolfgang Macherey, George Foster, Llion
+Jones, Mike Schuster, Noam Shazeer, Niki Parmar,
+Ashish Vaswani, Jakob Uszkoreit, Lukasz Kaiser,
+Zhifeng Chen, Yonghui Wu, and Macduff Hughes.
+2018. The best of both worlds: Combining recent
+advances in neural machine translation. In Proceed-
+ings of the 56th Annual Meeting of the Association
+for Computational Linguistics (Volume 1: Long Pa-
+pers), pages 76–86, Melbourne, Australia. Associa-
+tion for Computational Linguistics.
+
+4250Kevin Clark, Urvashi Khandelwal, Omer Levy, and
+Christopher D. Manning. 2019. What does BERT
+In Pro-
+look at? an analysis of BERT’s attention.
+ceedings of the 2019 ACL Workshop BlackboxNLP:
+Analyzing and Interpreting Neural Networks for
+NLP, pages 276–286, Florence, Italy. Association
+for Computational Linguistics.
+
+Zihang Dai, Zhilin Yang, Yiming Yang, Jaime Car-
+bonell, Quoc Le, and Ruslan Salakhutdinov. 2019.
+Transformer-XL: Attentive language models beyond
+In Proceedings of the 57th
+a ﬁxed-length context.
+Annual Meeting of the Association for Computa-
+tional Linguistics, pages 2978–2988, Florence, Italy.
+Association for Computational Linguistics.
+
+David Demeter, Gregory Kimmel, and Doug Downey.
+2020. Stolen probability: A structural weakness
+In Proceedings of the
+of neural language models.
+58th Annual Meeting of the Association for Compu-
+tational Linguistics, pages 2191–2197, Online. As-
+sociation for Computational Linguistics.
+
+Tobias Domhan. 2018. How much attention do you
+need? a granular analysis of neural machine trans-
+lation architectures. In Proceedings of the 56th An-
+nual Meeting of the Association for Computational
+Linguistics (Volume 1: Long Papers), pages 1799–
+1808, Melbourne, Australia. Association for Compu-
+tational Linguistics.
+
+Francisco Guzm´an, Peng-Jen Chen, Myle Ott, Juan
+Pino, Guillaume Lample, Philipp Koehn, Vishrav
+Chaudhary, and Marc’Aurelio Ranzato. 2019. The
+FLORES evaluation datasets for low-resource ma-
+chine translation: Nepali–English and Sinhala–
+English. In Proceedings of the 2019 Conference on
+Empirical Methods in Natural Language Processing
+and the 9th International Joint Conference on Natu-
+ral Language Processing (EMNLP-IJCNLP), pages
+6098–6111, Hong Kong, China. Association for
+Computational Linguistics.
+
+Sergey Ioffe and Christian Szegedy. 2015. Batch nor-
+malization: Accelerating deep network training by
+reducing internal covariate shift. volume 37 of Pro-
+ceedings of Machine Learning Research, pages 448–
+456, Lille, France. PMLR.
+
+Guillaume Klein, Yoon Kim, Yuntian Deng, Jean Senel-
+lart, and Alexander Rush. 2017. OpenNMT: Open-
+source toolkit for neural machine translation.
+In
+Proceedings of ACL 2017, System Demonstrations,
+pages 67–72, Vancouver, Canada. Association for
+Computational Linguistics.
+
+Philipp Koehn. 2004.
+
+Statistical signiﬁcance tests
+In Proceed-
+for machine translation evaluation.
+ings of the 2004 Conference on Empirical Meth-
+ods in Natural Language Processing, pages 388–
+395, Barcelona, Spain. Association for Computa-
+tional Linguistics.
+
+Chunjie Luo, Jianfeng Zhan, Xiaohe Xue, Lei Wang,
+and Rui Ren. 2018. Cosine Normalization: Using
+
+Cosine Similarity Instead of Dot Product in Neural
+Networks: 27th International Conference on Artiﬁ-
+cial Neural Networks, Rhodes, Greece, October 4-7,
+2018, Proceedings, Part I, pages 382–391.
+
+Toan Nguyen and David Chiang. 2018. Improving lex-
+In Pro-
+ical choice in neural machine translation.
+ceedings of the 2018 Conference of the North Amer-
+ican Chapter of the Association for Computational
+Linguistics: Human Language Technologies, Vol-
+ume 1 (Long Papers), pages 334–343, New Orleans,
+Louisiana. Association for Computational Linguis-
+tics.
+
+Toan Q. Nguyen and Julian Salazar. 2019. Transform-
+ers without tears: Improving the normalization of
+In Proc. Workshop on Spoken Lan-
+self-attention.
+guage Translation. To appear.
+
+Myle Ott, Sergey Edunov, Alexei Baevski, Angela
+Fan, Sam Gross, Nathan Ng, David Grangier, and
+fairseq: A fast, extensible
+Michael Auli. 2019.
+In Proceedings of
+toolkit for sequence modeling.
+NAACL-HLT 2019: Demonstrations.
+
+Kishore Papineni, Salim Roukos, Todd Ward, and Wei-
+Jing Zhu. 2002. Bleu: a method for automatic eval-
+In Proceedings of
+uation of machine translation.
+the 40th Annual Meeting of the Association for Com-
+putational Linguistics, pages 311–318, Philadelphia,
+Pennsylvania, USA. Association for Computational
+Linguistics.
+
+Matt Post. 2018. A call for clarity in reporting BLEU
+scores. In Proceedings of the Third Conference on
+Machine Translation: Research Papers, pages 186–
+191, Brussels, Belgium. Association for Computa-
+tional Linguistics.
+
+Ivan Provilkov, Dmitrii Emelianenko, and Elena Voita.
+2020. BPE-dropout: Simple and effective subword
+In Proceedings of the 58th Annual
+regularization.
+Meeting of the Association for Computational Lin-
+guistics, pages 1882–1892, Online. Association for
+Computational Linguistics.
+
+Ye Qi, Devendra Sachan, Matthieu Felix, Sarguna Pad-
+manabhan, and Graham Neubig. 2018. When and
+why are pre-trained word embeddings useful for neu-
+ral machine translation? In Proceedings of the 2018
+Conference of the North American Chapter of the
+Association for Computational Linguistics: Human
+Language Technologies, Volume 2 (Short Papers),
+pages 529–535, New Orleans, Louisiana. Associa-
+tion for Computational Linguistics.
+
+Oliver Richter and Roger Wattenhofer. 2020. Normal-
+
+ized attention without probability cage.
+
+Rico Sennrich, Barry Haddow, and Alexandra Birch.
+2016. Neural machine translation of rare words
+with subword units. In Proceedings of the 54th An-
+nual Meeting of the Association for Computational
+Linguistics (Volume 1: Long Papers), pages 1715–
+1725, Berlin, Germany. Association for Computa-
+tional Linguistics.
+
+4251Sheng Shen, Zhewei Yao, Amir Gholami, Michael Ma-
+honey, and Kurt Keutzer. 2020. Powernorm: Re-
+thinking batch normalization in transformers.
+In
+ICML.
+
+Ashish Vaswani, Samy Bengio, Eugene Brevdo, Fran-
+cois Chollet, Aidan Gomez, Stephan Gouws, Llion
+Jones, Łukasz Kaiser, Nal Kalchbrenner, Niki Par-
+mar, Ryan Sepassi, Noam Shazeer, and Jakob Uszko-
+reit. 2018. Tensor2Tensor for neural machine trans-
+lation. In Proceedings of the 13th Conference of the
+Association for Machine Translation in the Ameri-
+cas (Volume 1: Research Papers), pages 193–199,
+Boston, MA. Association for Machine Translation
+in the Americas.
+
+Ashish Vaswani, Noam Shazeer, Niki Parmar, Jakob
+Uszkoreit, Llion Jones, Aidan N Gomez, Ł ukasz
+Kaiser, and Illia Polosukhin. 2017. Attention is all
+In I. Guyon, U. V. Luxburg, S. Bengio,
+you need.
+H. Wallach, R. Fergus, S. Vishwanathan, and R. Gar-
+nett, editors, Advances in Neural Information Pro-
+cessing Systems 30, pages 5998–6008. Curran Asso-
+ciates, Inc.
+
+Qiang Wang, Bei Li, Tong Xiao,
+
+Jingbo Zhu,
+Changliang Li, Derek F. Wong, and Lidia S. Chao.
+2019. Learning deep transformer models for ma-
+chine translation. In Proceedings of the 57th Annual
+Meeting of the Association for Computational Lin-
+guistics, pages 1810–1822, Florence, Italy. Associa-
+tion for Computational Linguistics.
+
+Ruibin Xiong, Yunchang Yang, Di He, Kai Zheng,
+Shuxin Zheng, Chen Xing, Huishuai Zhang, Yanyan
+Lan, Liwei Wang, and Tie-Yan Liu. 2020. On layer
+normalization in the transformer architecture.
+
+Jingjing Xu, Xu Sun, Zhiyuan Zhang, Guangxiang
+Understanding
+Zhao, and Junyang Lin. 2019.
+and improving layer normalization.
+In H. Wal-
+lach, H. Larochelle, A. Beygelzimer, F. dAlch´e-Buc,
+E. Fox, and R. Garnett, editors, Advances in Neu-
+ral Information Processing Systems 32, pages 4381–
+4391. Curran Associates, Inc.
+
+Biao Zhang and Rico Sennrich. 2019. Root mean
+In H. Wallach,
+square layer normalization.
+H. Larochelle, A. Beygelzimer, F. dAlch´e-Buc,
+E. Fox, and R. Garnett, editors, Advances in Neural
+Information Processing Systems 32, pages 12381–
+12392. Curran Associates, Inc.
+
+Biao Zhang, Deyi Xiong, and Jinsong Su. 2018. Accel-
+erating neural transformer via an average attention
+network. In Proceedings of the 56th Annual Meet-
+ing of the Association for Computational Linguis-
+tics, Melbourne, Australia. Association for Compu-
+tational Linguistics.
+
+Guangxiang Zhao, Junyang Lin, Zhiyuan Zhang, Xu-
+ancheng Ren, Qi Su, and Xu Sun. 2019. Explicit
+sparse transformer: Concentrated attention through
+explicit selection.
+
+Number of Heads Test BLEU
+
+2
+4
+8
+16
+32
+
+32.40
+33.16
+33.24
+32.42
+32.30
+
+Table 4:
+varying the number of attention heads.
+
+IWSLT’15 en→vi test BLEU for QKNORM
+
+Percentile
+
+Test BLEU
+
+75th
+90th
+92.5th
+95th
+97.5th
+99th
+Maximum Word Count
+
+32.58
+32.89
+32.64
+33.13
+33.24
+32.64
+33.10
+
+IWSLT’15 en→vi test BLEU for QKNORM
+Table 5:
+varying the training set word count percentile used to
+initialize the learnable scaling factor g.
+
+Appendix
+
+A Varying the Number of Heads
+
+In Table 4, we show the performance of QKNORM
+on the en→vi test set varying the number of heads.
+Even when the number of heads is 32 (with head
+dimension 16), the performance remains stable.
+
+B Equation 3
+
+Intuitively, longer sequences require more scaling
+to make it at least possible for the maximum values
+in QKT to softmax to 1. We arrived at Equation
+3 empirically by applying softmax to similarity
+matrices of word vectors scaled up with various
+d in scaled dot product attention
+heuristics. Like
+(Vaswani et al., 2017), Equation 3 is a rule of thumb
+but it initializes a learnable parameter.
+
+√
+
+We determined the best value of L in Equation 3
+by running the en→vi translation task with different
+percentile values. Table 5 shows the results from
+those experiments.
+
+C Ablation Experiments
+
+Table 6 shares test performance on en→vi when
+we ablate speciﬁc components of QKNORM. The
+biggest performance drop in these experiments
+comes from omitting g, the learnable scaling factor.
+This is unsurprising because if we don’t scale up
+
+4252Test BLEU
+
+Experiment
+Without g
+24.53
+Without LAYERNORM
+31.56
+32.63
+Without FIXNORM
+Without FIXNORM or PRENORM
+32.20
+(cid:96)2-normalizing V along with Q and K 32.34
+
+Table 6: Ablation Experiments.
+
+ˆQ ˆKT its values are all within [−1, 1] and softmax
+is a function of the differences between values.
+
+4253

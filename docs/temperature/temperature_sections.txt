@@ -1,0 +1,147 @@
+=== RELEVANT TEMPERATURE SECTIONS ===
+
+
+--- 1. TRANSOLVER++ (Ada-Temp) ---
+
+j=1
+,
+(1)
+where τ0 is the temperature constant. Next, the canonical
+attention mechanism is applied to learned physical states to
+capture underlying physics interactions:
+q, k, v = Linear(s), s′ = Softmax
+qk⊤
+√
+C
+
+adjustment to the physics learning process. Specifically, we
+change the sharpness of the state distribution by learning to
+adjust the temperature τ0 in the Softmax function, namely
+Ada-Temp: τ = {τi}N
+i=1 = {τ0 + Linear(xi)}N
+i=1 ,
+(3)
+where τ ∈RN×1 and a higher temperature forms a more
+uniform distribution, while a lower temperature makes the
+distribution more concentrated on crucial states. Through a
+learnable linear projection layer, we can dynamically adjust
+the state distribution based on each point’s local properties.
+Slice reparameterization
+As mentioned above, we try
+to learn eidetic physical states and assign mesh points to
+physical states with a possibility w. In the canonical design
+of Transolver, it uses Softmax to form a categorical distribu-
+tion across states. However, simply generating a categorical
+distribution is not enough, as we have not completely mod-
+eled the assignment process from points to certain physical
+states. Considering that direct sampling via Argmax is non-
+differentiable, we propose to adopt the Gumbel-Softmax
+(Jang et al., 2017) to perform differentiable sampling from
+the discrete categorical distribution, which is accomplished
+with the following reparameterization technique:
+Rep-Slice(x, τ) = Softmax
+Linear(x) −log(−log ϵ)
+τ
+
+,
+(4)
+where τ ∈RN×1 is the local adaptive temperature and ϵ =
+{ϵi}N
+i=1, ϵi ∼U(0, 1). Here log(−log ϵi) ∼Gumbel(0, 1),
+where Gumbel is a type of generalized extreme value dis-
+tribution. Replacing Transolver’s slice weights w in Eq. (1)
+
+
+--- 2. QK-NORM (Learnable Scaling) ---
+
+Interestingly, Nguyen and
+Salazar (2019) ﬁnd PRENORM to be superior in
+low-resource but not high-resource translation set-
+tings.
+
+Lastly, SCALENORM replaces layer normaliza-
+tion with (cid:96)2 normalization along the embedding
+dimension, multiplied by a learnable scalar param-
+eter initialized with 1√
+(where d is the embedding
+d
+dimension; the same term is used in scaled dot
+
+product attention (Vaswani et al., 2017)).
+
+In other words, SCALENORM applies (cid:96)2 normal-
+words it should not attend to. Instead of dividing by
+√
+d as in scaled dot product attention we scale up
+using a learnable parameter that we initialize with
+a value that depends on the length of the sequences
+in the training data (and hence on the number of
+elements in QKT ):
+
+g0 = log2(L2 − L)
+
+(3)
+
+where L is the 97.5th percentile sequence length
+across all training data sequences for source and
+target.
+
+The attention operation thus changes from
+
+softmax(
+
+QKT
+√
+d
+
+)V
+
+(4)
+
+to
+
+softmax(g ∗ ˆQ ˆKT )V
+(5)
+where ˆQ and ˆK are Q and K with (cid:96)2-normalization
+applied along their head dimensions and g is a
+learnable scalar parameter initialized with g0 as
+computed in (3).
+
+4248Examples
+
+gl→en
+sk→en
+en→vi
+en→he
+ar→en
+
+10k
+
+
+--- 3. LOW-WIDTH GRAPH TRANSFORMERS (Temperature Annealing) ---
+
+to size one reduced the performance significantly; however, adding a learnable global scale s, so that
+Vi becomes s Vi/||Vi||2, maintained performance while making attention scores more meaningful.
+
+Variable Temperature One of the side goals is to have sharper attention scores, guiding the nodes
+to get their information from as few nodes as possible. Using temperature in the attention mechanism
+is a natural way to do this, where logits before the softmax will be divided by a temperature factor
+τ . Normal attention corresponds to τ = 1; smaller τ means sharper attention scores. However,
+setting the temperature to a small value from the beginning will make the random initialization more
+significant, and increase the randomness in the training process. Instead, we start with τ = 1.0 and
+gradually anneal it to 0.05 by the end of the training. We set an initial phase for c epochs where
+we use τ = 1; this lets the model learn which neighbors are more important for each node slowly.
+Then we multiply the τ with a factor f after each epoch, getting a temperature in epoch t > c of
+max(f t−c, 0.05). For fast-converging models, we use c = 5, f = 0.98; for slower-converging ones,
+we use c = 10, f = 0.95.
+
+4.2 Sparser Attention Pattern
+
+The memory and time complexity of Exphormers is linearly dependent on the number of edges.
+Reducing the number of edges can alleviate memory consumption. Additionally, a sparser pattern
+means that batching techniques such as ego subgraphs can be effectively applied to the model. In
+this work, we analyze how effective the sparser model can work and up to what factor we can
+
+
+--- 4. GNOT (Heterogeneous Normalized Attention) ---
+
