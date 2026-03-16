@@ -47,20 +47,6 @@ physics-informed attention mechanisms.
 
 ---
 
-### 4. GNOT (ICML 2023) - `gnot.txt`
-**Citation:** Hao et al., "GNOT: A General Neural Operator Transformer for Operator Learning," ICML 2023.
-
-**Key Contribution:** Heterogeneous Normalized Attention for operator learning:
-- Uses attention mechanisms for learning operators on irregular meshes
-- Temperature scaling controls attention sharpness for multi-scale physics problems
-- Focuses on handling multiple input functions and irregular meshes
-
-**Note:** This paper focuses more on architecture for multi-scale problems rather than
-temperature mechanisms specifically. Included as it represents state-of-the-art in 
-neural operator transformers.
-
----
-
 ## Implementation Recommendations Summary
 
 Based on these papers, here are the recommended approaches for implementing 
