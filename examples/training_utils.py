@@ -112,9 +112,10 @@ class Model:
 
         # Extract input and target
         if isinstance(batch, dict):
-            target = batch.pop(target_key)
-            # Pass remaining as kwargs
-            predictions = self.architecture(**batch)
+            target = batch[target_key]
+            # Pass remaining as kwargs (do not mutate caller's dict)
+            inputs = {k: v for k, v in batch.items() if k != target_key}
+            predictions = self.architecture(**inputs)
         elif isinstance(batch, (tuple, list)) and len(batch) == 2:
             inputs, target = batch
             predictions = self.architecture(inputs)

@@ -2,15 +2,20 @@
 GraphsTuple: Minimal graph representation.
 
 Based on DeepMind's Graph Nets library but simplified:
-- No validation in __post_init__
 - Use dataclasses.replace() instead of custom replace()
 - Minimal methods
+- Validation via __post_init__ when VALIDATE_GRAPHS is True (default: False)
 """
 
 from dataclasses import dataclass, replace
 from typing import Optional, List
 import torch
 from torch import Tensor
+
+# Set to True to enable fail-fast validation in GraphsTuple.__post_init__.
+# Useful for debugging; keep False in production to avoid overhead from
+# dataclasses.replace() calls inside processor forward passes.
+VALIDATE_GRAPHS: bool = False
 
 
 @dataclass
@@ -36,7 +41,116 @@ class GraphsTuple:
     n_node: Optional[Tensor] = None
     n_edge: Optional[Tensor] = None
     positions: Optional[Tensor] = None
-    
+
+    def __post_init__(self) -> None:
+        """Optionally validate the graph on construction.
+
+        Validation is skipped by default to avoid overhead from
+        ``dataclasses.replace()`` calls inside forward passes.  Enable it by
+        setting ``core.graph.VALIDATE_GRAPHS = True`` before creating graphs,
+        or call :meth:`validate` explicitly.
+        """
+        if VALIDATE_GRAPHS:
+            self.validate()
+
+    def validate(self) -> None:
+        """Validate internal consistency of this GraphsTuple.
+
+        Checks:
+        1. ``n_node`` sum matches ``nodes.shape[0]``.
+        2. ``n_edge`` sum matches ``edges.shape[0]``.
+        3. ``senders`` and ``receivers`` lie within ``[0, num_nodes)``.
+        4. ``senders`` and ``receivers`` have equal length and match ``edges``.
+        5. ``positions`` has the same leading dimension as ``nodes``.
+        6. All tensors reside on the same device.
+
+        Raises:
+            ValueError: on any consistency violation.
+        """
+        # --- shape / count checks ---
+        if self.n_node is not None and self.nodes is not None:
+            expected = int(self.n_node.sum().item())
+            actual = self.nodes.shape[0]
+            if expected != actual:
+                raise ValueError(
+                    f"GraphsTuple: n_node sums to {expected} but "
+                    f"nodes.shape[0] == {actual}"
+                )
+
+        if self.n_edge is not None and self.edges is not None:
+            expected = int(self.n_edge.sum().item())
+            actual = self.edges.shape[0]
+            if expected != actual:
+                raise ValueError(
+                    f"GraphsTuple: n_edge sums to {expected} but "
+                    f"edges.shape[0] == {actual}"
+                )
+
+        # --- sender / receiver consistency ---
+        if self.senders is not None and self.receivers is not None:
+            if self.senders.shape != self.receivers.shape:
+                raise ValueError(
+                    f"GraphsTuple: senders.shape {self.senders.shape} != "
+                    f"receivers.shape {self.receivers.shape}"
+                )
+            if self.edges is not None and self.senders.shape[0] != self.edges.shape[0]:
+                raise ValueError(
+                    f"GraphsTuple: senders length {self.senders.shape[0]} != "
+                    f"edges length {self.edges.shape[0]}"
+                )
+        elif (self.senders is None) != (self.receivers is None):
+            raise ValueError(
+                "GraphsTuple: senders and receivers must both be set or both be None"
+            )
+
+        # --- node-index bounds check ---
+        if self.nodes is not None and self.senders is not None:
+            num_nodes = self.nodes.shape[0]
+            if num_nodes > 0:
+                s_min = int(self.senders.min().item()) if self.senders.numel() > 0 else 0
+                s_max = int(self.senders.max().item()) if self.senders.numel() > 0 else 0
+                r_min = int(self.receivers.min().item()) if self.receivers.numel() > 0 else 0
+                r_max = int(self.receivers.max().item()) if self.receivers.numel() > 0 else 0
+                if s_min < 0 or s_max >= num_nodes:
+                    raise ValueError(
+                        f"GraphsTuple: senders out of bounds — values in "
+                        f"[{s_min}, {s_max}] but num_nodes={num_nodes}"
+                    )
+                if r_min < 0 or r_max >= num_nodes:
+                    raise ValueError(
+                        f"GraphsTuple: receivers out of bounds — values in "
+                        f"[{r_min}, {r_max}] but num_nodes={num_nodes}"
+                    )
+
+        # --- positions shape ---
+        if self.positions is not None and self.nodes is not None:
+            if self.positions.shape[0] != self.nodes.shape[0]:
+                raise ValueError(
+                    f"GraphsTuple: positions.shape[0]={self.positions.shape[0]} != "
+                    f"nodes.shape[0]={self.nodes.shape[0]}"
+                )
+
+        # --- device consistency ---
+        tensors = {
+            "nodes": self.nodes,
+            "edges": self.edges,
+            "receivers": self.receivers,
+            "senders": self.senders,
+            "globals": self.globals,
+            "n_node": self.n_node,
+            "n_edge": self.n_edge,
+            "positions": self.positions,
+        }
+        devices = {
+            name: t.device for name, t in tensors.items() if t is not None
+        }
+        unique_devices = set(devices.values())
+        if len(unique_devices) > 1:
+            details = ", ".join(f"{n}={d}" for n, d in devices.items())
+            raise ValueError(
+                f"GraphsTuple: tensors on multiple devices — {details}"
+            )
+
     def to(self, device) -> 'GraphsTuple':
         """Move all tensors to device."""
         return GraphsTuple(

@@ -12,7 +12,7 @@ class TestModulation:
 
     def test_empty_modulation(self):
         """Empty modulation has None for all fields."""
-        from gnn_pde_v2.components.transformer import Modulation
+        from gnn_pde_v2.core.protocols import Modulation
 
         mod = Modulation()
         assert mod.shift is None
@@ -22,7 +22,7 @@ class TestModulation:
 
     def test_modulation_with_tensors(self):
         """Modulation can hold tensors."""
-        from gnn_pde_v2.components.transformer import Modulation
+        from gnn_pde_v2.core.protocols import Modulation
 
         shift = torch.randn(2, 10, 64)
         scale = torch.randn(3, 10, 64)
@@ -37,7 +37,7 @@ class TestModulation:
     def test_modulation_is_dataclass(self):
         """Modulation is a dataclass with expected fields."""
         from dataclasses import fields
-        from gnn_pde_v2.components.transformer import Modulation
+        from gnn_pde_v2.core.protocols import Modulation
         field_names = {f.name for f in fields(Modulation)}
         assert field_names == {'shift', 'scale', 'gate', 'cross_kv'}
 
@@ -47,7 +47,7 @@ class TestConditioningProtocol:
 
     def test_is_abstract(self):
         """Cannot instantiate ConditioningProtocol directly."""
-        from gnn_pde_v2.components.transformer import ConditioningProtocol
+        from gnn_pde_v2.core.protocols import ConditioningProtocol
 
         with pytest.raises(TypeError):
             ConditioningProtocol()
@@ -55,11 +55,11 @@ class TestConditioningProtocol:
     def test_is_nn_module_subclass(self):
         """ConditioningProtocol inherits from nn.Module."""
         import torch.nn as nn
-        from gnn_pde_v2.components.transformer import ConditioningProtocol
+        from gnn_pde_v2.core.protocols import ConditioningProtocol
         assert issubclass(ConditioningProtocol, nn.Module)
 
     def test_is_abc_subclass(self):
         """ConditioningProtocol inherits from ABC."""
         from abc import ABC
-        from gnn_pde_v2.components.transformer import ConditioningProtocol
+        from gnn_pde_v2.core.protocols import ConditioningProtocol
         assert issubclass(ConditioningProtocol, ABC)

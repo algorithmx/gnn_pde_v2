@@ -6,9 +6,13 @@ otherwise fall back to pure PyTorch implementations.
 """
 
 import functools
+import warnings
 from typing import Literal, Optional, Tuple
 import torch
 from torch import Tensor
+
+# Track whether we've warned about torch_scatter fallback
+_TORCH_SCATTER_WARNING_ISSUED: bool = False
 
 # Sentinel used to initialise output buffers for reduction ops.
 _REDUCE_INIT = {
@@ -52,7 +56,16 @@ def scatter(
         from torch_scatter import scatter as _scatter
         return _scatter(src, index, dim=dim, dim_size=dim_size, reduce=reduce)
     except ImportError:
-        pass
+        global _TORCH_SCATTER_WARNING_ISSUED
+        if not _TORCH_SCATTER_WARNING_ISSUED:
+            _TORCH_SCATTER_WARNING_ISSUED = True
+            warnings.warn(
+                "torch_scatter not available; falling back to pure PyTorch scatter. "
+                "Install torch_scatter for better performance: "
+                "pip install torch_scatter",
+                UserWarning,
+                stacklevel=2,
+            )
 
     # ── pure-PyTorch fallback ─────────────────────────────────────────────────
     init_val, op, reduce_str = _REDUCE_INIT[reduce]
@@ -219,37 +232,5 @@ def aggregate_to_global(
     return scatter(features, batch_index, dim=0, dim_size=len(counts), reduce=method)
 
 
-def broadcast_global(globals_: Tensor, counts: Tensor) -> Tensor:
-    """
-    Broadcast per-graph global features to every node or edge in the batch.
-
-    Args:
-        globals_: [batch_size, global_feat_dim] - One vector per graph
-        counts: [batch_size] - Number of nodes (or edges) per graph
-
-    Returns:
-        [total, global_feat_dim] - Global features repeated for each item
-    """
-    return torch.repeat_interleave(globals_, counts, dim=0)
-
-
-def aggregate_to_global(
-    features: Tensor,
-    counts: Tensor,
-    method: Literal['sum', 'mean', 'max', 'min'] = 'mean',
-) -> Tensor:
-    """
-    Pool node or edge features back to graph-level globals.
-
-    Args:
-        features: [total, feat_dim] - Per-node or per-edge features
-        counts: [batch_size] - Number of items per graph
-        method: Pooling method — ``'sum'``, ``'mean'``, ``'max'``, ``'min'``
-
-    Returns:
-        [batch_size, feat_dim] - Pooled features per graph
-    """
-    batch_index = torch.repeat_interleave(
-        torch.arange(len(counts), device=features.device), counts
-    )
-    return scatter(features, batch_index, dim=0, dim_size=len(counts), reduce=method)
+# Backward compatibility alias (broadcast_global was renamed to broadcast_global)
+# TODO: Deprecate broadcast_global in favor of broadcast_global in future versions

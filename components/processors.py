@@ -23,6 +23,7 @@ from typing import Callable, Optional
 
 import torch
 import torch.nn as nn
+from torch.utils.checkpoint import checkpoint
 
 from ..core.graph import GraphsTuple
 from ..core.functional import aggregate_edges, broadcast_global, aggregate_to_global
@@ -269,18 +270,29 @@ class GraphNetProcessor(nn.Module):
     Stacks multiple :class:`GraphNetBlock` instances with optional residual
     connections.  No global state is maintained or expected.
 
+    Uses **pre-norm residual connections** for numerical stability in deep
+    networks: LayerNorm is applied *before* each block, and the residual
+    adds the block's output to the normalized input.
+
     Args:
         latent_dim: Node and edge feature dimension.
         n_layers: Number of :class:`GraphNetBlock` layers.
         hidden_dim: Hidden dimension for internal MLPs.
         activation: Activation function name.
         residual: Whether to add residual connections between blocks.
+            When True, uses pre-norm residuals for stability.
         aggregate_fn: Edge-to-node aggregation callable passed to each
             block.  Defaults to sum aggregation.
+        use_checkpoint: If ``True``, applies gradient checkpointing to
+            each block during the forward pass.  Trades compute for
+            memory — each block's activations are recomputed during the
+            backward pass instead of being stored.  Requires PyTorch
+            2.0+ (``use_reentrant=False`` convention).
 
     Example::
 
-        processor = GraphNetProcessor(latent_dim=128, n_layers=15)
+        processor = GraphNetProcessor(latent_dim=128, n_layers=15,
+                                      use_checkpoint=True)
         out_graph = processor(graph)
     """
 
@@ -292,10 +304,12 @@ class GraphNetProcessor(nn.Module):
         activation: str = 'gelu',
         residual: bool = True,
         aggregate_fn: Optional[Callable] = None,
+        use_checkpoint: bool = False,
     ):
         super().__init__()
 
         self.residual = residual
+        self.use_checkpoint = use_checkpoint
         self.blocks = nn.ModuleList([
             GraphNetBlock(
                 latent_dim=latent_dim,
@@ -305,6 +319,15 @@ class GraphNetProcessor(nn.Module):
             )
             for _ in range(n_layers)
         ])
+
+        # Pre-norm layers for numerical stability in deep networks
+        if self.residual:
+            self.node_norms = nn.ModuleList([
+                nn.LayerNorm(latent_dim) for _ in range(n_layers)
+            ])
+            self.edge_norms = nn.ModuleList([
+                nn.LayerNorm(latent_dim) for _ in range(n_layers)
+            ])
 
     def forward(self, graph: GraphsTuple) -> GraphsTuple:
         """
@@ -316,14 +339,22 @@ class GraphNetProcessor(nn.Module):
         Returns:
             Processed :class:`~gnn_pde_v2.core.GraphsTuple`.
         """
-        for block in self.blocks:
-            new_graph = block(graph)
+        for i, block in enumerate(self.blocks):
             if self.residual:
-                new_graph = new_graph.replace(
-                    nodes=graph.nodes + new_graph.nodes,
-                    edges=graph.edges + new_graph.edges,
-                )
-            graph = new_graph
+                nn_, en_ = self.node_norms[i], self.edge_norms[i]
+                def _step(nodes, edges, _b=block, _g=graph, _nn=nn_, _en=en_):
+                    out = _b(_g.replace(nodes=_nn(nodes), edges=_en(edges)))
+                    return nodes + out.nodes, edges + out.edges
+            else:
+                def _step(nodes, edges, _b=block, _g=graph):
+                    out = _b(_g.replace(nodes=nodes, edges=edges))
+                    return out.nodes, out.edges
+
+            if self.use_checkpoint:
+                new_nodes, new_edges = checkpoint(_step, graph.nodes, graph.edges, use_reentrant=False)
+            else:
+                new_nodes, new_edges = _step(graph.nodes, graph.edges)
+            graph = graph.replace(nodes=new_nodes, edges=new_edges)
         return graph
 
 
@@ -335,6 +366,10 @@ class GlobalGraphNetProcessor(nn.Module):
     residual connections.  All three feature channels — nodes, edges, and
     globals — are updated at every layer.
 
+    Uses **pre-norm residual connections** for numerical stability in deep
+    networks: LayerNorm is applied *before* each block, and the residual
+    adds the block's output to the normalized input.
+
     Args:
         latent_dim: Node and edge feature dimension.
         global_latent_dim: Global feature dimension.  **Required.**
@@ -342,13 +377,18 @@ class GlobalGraphNetProcessor(nn.Module):
         hidden_dim: Hidden dimension for internal MLPs.
         activation: Activation function name.
         residual: Whether to add residual connections between blocks.
+            When True, uses pre-norm residuals for stability.
         aggregate_fn: Edge-to-node aggregation callable.
         global_pool: Pooling method for node/edge → global aggregation.
+        use_checkpoint: If ``True``, applies gradient checkpointing to
+            each block.  Reduces peak memory by recomputing activations
+            during the backward pass.  Requires PyTorch 2.0+.
 
     Example::
 
         processor = GlobalGraphNetProcessor(
-            latent_dim=128, global_latent_dim=32, n_layers=15
+            latent_dim=128, global_latent_dim=32, n_layers=15,
+            use_checkpoint=True
         )
         out_graph = processor(graph)   # graph.globals must not be None
     """
@@ -363,10 +403,12 @@ class GlobalGraphNetProcessor(nn.Module):
         residual: bool = True,
         aggregate_fn: Optional[Callable] = None,
         global_pool: str = 'mean',
+        use_checkpoint: bool = False,
     ):
         super().__init__()
 
         self.residual = residual
+        self.use_checkpoint = use_checkpoint
         self.blocks = nn.ModuleList([
             GlobalGraphNetBlock(
                 latent_dim=latent_dim,
@@ -379,6 +421,18 @@ class GlobalGraphNetProcessor(nn.Module):
             for _ in range(n_layers)
         ])
 
+        # Pre-norm layers for numerical stability in deep networks
+        if self.residual:
+            self.node_norms = nn.ModuleList([
+                nn.LayerNorm(latent_dim) for _ in range(n_layers)
+            ])
+            self.edge_norms = nn.ModuleList([
+                nn.LayerNorm(latent_dim) for _ in range(n_layers)
+            ])
+            self.global_norms = nn.ModuleList([
+                nn.LayerNorm(global_latent_dim) for _ in range(n_layers)
+            ])
+
     def forward(self, graph: GraphsTuple) -> GraphsTuple:
         """
         Process graph through all :class:`GlobalGraphNetBlock` layers.
@@ -390,13 +444,57 @@ class GlobalGraphNetProcessor(nn.Module):
         Returns:
             Processed :class:`~gnn_pde_v2.core.GraphsTuple`.
         """
-        for block in self.blocks:
-            new_graph = block(graph)
-            if self.residual:
-                new_graph = new_graph.replace(
-                    nodes=graph.nodes + new_graph.nodes,
-                    edges=graph.edges + new_graph.edges,
-                    globals=graph.globals + new_graph.globals,
+        for i, block in enumerate(self.blocks):
+            if self.use_checkpoint:
+                if self.residual:
+                    node_norm = self.node_norms[i]
+                    edge_norm = self.edge_norms[i]
+                    global_norm = self.global_norms[i]
+                    def _step(nodes, edges, globs,
+                              _b=block, _g=graph,
+                              _nn=node_norm, _en=edge_norm, _gn=global_norm):
+                        norm_g = _g.replace(
+                            nodes=_nn(nodes),
+                            edges=_en(edges),
+                            globals=_gn(globs),
+                        )
+                        out = _b(norm_g)
+                        return nodes + out.nodes, edges + out.edges, globs + out.globals
+                    new_nodes, new_edges, new_globals = checkpoint(
+                        _step, graph.nodes, graph.edges, graph.globals,
+                        use_reentrant=False
+                    )
+                else:
+                    def _step(nodes, edges, globs, _b=block, _g=graph):
+                        out = _b(_g.replace(nodes=nodes, edges=edges, globals=globs))
+                        return out.nodes, out.edges, out.globals
+                    new_nodes, new_edges, new_globals = checkpoint(
+                        _step, graph.nodes, graph.edges, graph.globals,
+                        use_reentrant=False
+                    )
+                graph = graph.replace(
+                    nodes=new_nodes, edges=new_edges, globals=new_globals
                 )
-            graph = new_graph
+            else:
+                if self.residual:
+                    # Pre-norm: normalize before block
+                    normalized_nodes = self.node_norms[i](graph.nodes)
+                    normalized_edges = self.edge_norms[i](graph.edges)
+                    normalized_globals = self.global_norms[i](graph.globals)
+                    normalized_graph = graph.replace(
+                        nodes=normalized_nodes,
+                        edges=normalized_edges,
+                        globals=normalized_globals,
+                    )
+                    # Apply block to normalized input
+                    new_graph = block(normalized_graph)
+                    # Residual: add block output to original (unnormalized) input
+                    new_graph = new_graph.replace(
+                        nodes=graph.nodes + new_graph.nodes,
+                        edges=graph.edges + new_graph.edges,
+                        globals=graph.globals + new_graph.globals,
+                    )
+                else:
+                    new_graph = block(graph)
+                graph = new_graph
         return graph

@@ -69,7 +69,7 @@ def compl_mul3d(input: torch.Tensor, weights: torch.Tensor) -> torch.Tensor:
     return compl_mul_nd(input, weights, n_dim=3)
 
 
-def _get_conv_nd(n_dim: int, in_ch: int, out_ch: int, kernel_size: int = 1) -> nn.Module:
+def _get_conv_nd(n_dim: int, in_ch: int, out_ch: int, kernel_size: int = 1, padding: int = 0) -> nn.Module:
     """
     Factory function to get the appropriate Conv layer for n-dimensional data.
     
@@ -78,6 +78,7 @@ def _get_conv_nd(n_dim: int, in_ch: int, out_ch: int, kernel_size: int = 1) -> n
         in_ch: Number of input channels
         out_ch: Number of output channels
         kernel_size: Kernel size for the convolution (default: 1 for pointwise)
+        padding: Padding for the convolution (default: 0)
         
     Returns:
         nn.Conv1d, nn.Conv2d, or nn.Conv3d instance
@@ -88,7 +89,7 @@ def _get_conv_nd(n_dim: int, in_ch: int, out_ch: int, kernel_size: int = 1) -> n
     conv_classes = {1: nn.Conv1d, 2: nn.Conv2d, 3: nn.Conv3d}
     if n_dim not in conv_classes:
         raise ValueError(f"n_dim must be 1, 2, or 3, got {n_dim}")
-    return conv_classes[n_dim](in_ch, out_ch, kernel_size)
+    return conv_classes[n_dim](in_ch, out_ch, kernel_size, padding=padding)
 
 
 # ---------------------------------------------------------------------------
