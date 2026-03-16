@@ -189,9 +189,8 @@ The framework provides a pluggable conditioning protocol for transformer-based m
 | `FiLMConditioning` | Feature-wise Linear Modulation (γ, β) |
 
 ```python
-from gnn_pde_v2.components import (
-    Modulation, ConditioningProtocol, AdaLNConditioning, FiLMConditioning
-)
+from gnn_pde_v2.core.protocols import Modulation, ConditioningProtocol
+from gnn_pde_v2.components import AdaLNConditioning, FiLMConditioning
 
 # Use AdaLN conditioning with transformer
 conditioner = AdaLNConditioning(cond_dim=64, out_dim=128)

@@ -66,12 +66,15 @@ class GraphPool(nn.Module):
             indices = torch.arange(num_nodes, device=nodes.device)
             return graph, indices
         
+        # Ensure proj_vector is on the same device as nodes
+        proj_vector = self.proj_vector.to(nodes.device)
+        
         # Compute projection values
-        proj_norm = torch.norm(self.proj_vector)
+        proj_norm = torch.norm(proj_vector)
         if proj_norm > 0:
-            y = torch.matmul(nodes, self.proj_vector) / proj_norm
+            y = torch.matmul(nodes, proj_vector) / proj_norm
         else:
-            y = torch.matmul(nodes, self.proj_vector)
+            y = torch.matmul(nodes, proj_vector)
         
         # Select top-k nodes
         k_actual = min(self.k, num_nodes)
@@ -90,29 +93,44 @@ class GraphPool(nn.Module):
         pooled_senders = None
         pooled_receivers = None
         
-        if graph.edges is not None and graph.senders is not None:
-            if self.connectivity_augmentation > 1:
+        if graph.senders is not None and graph.receivers is not None:
+            use_augmentation = self.connectivity_augmentation > 1
+            
+            if use_augmentation:
                 adj = self._build_adjacency(num_nodes, graph.senders, graph.receivers)
                 # Compute graph power
                 adj_power = adj
                 for _ in range(self.connectivity_augmentation - 1):
                     adj_power = torch.matmul(adj_power, adj)
                 adj = (adj_power > 0).float()
-                senders, receivers = torch.nonzero(adj, as_tuple=True)
+                aug_senders, aug_receivers = torch.nonzero(adj, as_tuple=True)
             else:
-                senders, receivers = graph.senders, graph.receivers
+                aug_senders, aug_receivers = graph.senders, graph.receivers
             
             # Create mask for selected nodes
             selected_mask = torch.zeros(num_nodes, dtype=torch.bool, device=nodes.device)
             selected_mask[indices] = True
             
             # Keep edges where both endpoints are selected
-            edge_mask = selected_mask[senders] & selected_mask[receivers]
+            edge_mask = selected_mask[aug_senders] & selected_mask[aug_receivers]
             
             if edge_mask.any():
-                pooled_senders = senders[edge_mask]
-                pooled_receivers = receivers[edge_mask]
-                pooled_edges = graph.edges[edge_mask] if graph.edges is not None else None
+                pooled_senders = aug_senders[edge_mask]
+                pooled_receivers = aug_receivers[edge_mask]
+                
+                # Preserve edge features only if not using augmentation
+                if not use_augmentation and graph.edges is not None:
+                    pooled_edges = graph.edges[edge_mask]
+                else:
+                    # When using augmentation, create zero edge features with correct dimension
+                    if graph.edges is not None:
+                        edge_feature_dim = graph.edges.shape[-1]
+                        pooled_edges = torch.zeros(
+                            pooled_senders.shape[0], 
+                            edge_feature_dim,
+                            device=nodes.device,
+                            dtype=graph.edges.dtype
+                        )
                 
                 # Remap indices
                 index_map = torch.zeros(num_nodes, dtype=torch.long, device=nodes.device)

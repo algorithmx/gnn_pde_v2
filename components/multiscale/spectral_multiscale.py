@@ -152,16 +152,20 @@ class MiniUNet(nn.Module):
         # Decoder
         self.decoder_ups = nn.ModuleList()
         self.decoder_convs = nn.ModuleList()
+        self.skip_convs = nn.ModuleList()  # For matching skip connection channels
         
         for i in range(depth - 1, -1, -1):
+            skip_ch = hidden_channels * (2 ** i)  # Channels from encoder skip
             out_ch = hidden_channels * (2 ** i) if i > 0 else hidden_channels
+            
             self.decoder_ups.append(
                 nn.Upsample(scale_factor=2, mode='bilinear' if n_dim == 2 else 'trilinear',
                            align_corners=False)
             )
+            # Conv to combine upsampled + skip, then reduce channels
             self.decoder_convs.append(
                 nn.Sequential(
-                    _get_conv_nd(n_dim, in_ch, out_ch, kernel_size=3, padding=1),
+                    _get_conv_nd(n_dim, in_ch + skip_ch, out_ch, kernel_size=3, padding=1),
                     nn.GELU(),
                     _get_conv_nd(n_dim, out_ch, out_ch, kernel_size=3, padding=1),
                     nn.GELU(),
@@ -198,10 +202,11 @@ class MiniUNet(nn.Module):
             if encoder_features:
                 skip = encoder_features.pop()
                 # Handle size mismatch
-                if x.shape != skip.shape:
+                if x.shape[2:] != skip.shape[2:]:
                     x = F.interpolate(x, size=skip.shape[2:], mode='bilinear' if self.n_dim == 2 else 'trilinear',
                                      align_corners=False)
-                x = x + skip
+                # Concatenate along channel dimension
+                x = torch.cat([x, skip], dim=1)
             x = conv(x)
         
         # Output

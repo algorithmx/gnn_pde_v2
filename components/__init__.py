@@ -59,6 +59,15 @@ from .transformer import (
     RelativePositionEncoding,
     ZeroConditioning, AdaLNConditioning, DualAdaLNConditioning, FiLMConditioning,
 )
+from .temperature import (
+    TemperatureBase,
+    FixedTemperature,
+    LearnableScalarTemperature,
+    PerHeadTemperature,
+    AdaptiveTemperature,
+    AnnealedTemperature,
+    create_temperature_module,
+)
 from .spectral import FNOProcessor, SpectralConv, SeparableSpectralConv, SpectralConvBase, make_spectral_conv, FNOBlock, AFNOBlock
 
 # Structural protocols — re-exported here for convenience since they describe
@@ -93,6 +102,14 @@ __all__ = [
     "MultiHeadAttention",
     "PhysicsTokenAttention",
     "RelativePositionEncoding",
+    # Temperature mechanisms
+    "TemperatureBase",
+    "FixedTemperature",
+    "LearnableScalarTemperature",
+    "PerHeadTemperature",
+    "AdaptiveTemperature",
+    "AnnealedTemperature",
+    "create_temperature_module",
     "FNOProcessor",
     "SpectralConv",
     "SeparableSpectralConv",

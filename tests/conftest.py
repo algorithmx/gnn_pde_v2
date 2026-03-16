@@ -61,3 +61,31 @@ def batched_graphs(device):
     )
     
     return [g1, g2]
+
+
+@pytest.fixture
+def sample_graph_100(device):
+    """Create a sample graph with 100 nodes for pooling tests."""
+    from gnn_pde_v2 import GraphsTuple
+    
+    num_nodes = 100
+    feature_dim = 16
+    
+    nodes = torch.randn(num_nodes, feature_dim, device=device)
+    senders = torch.randint(0, num_nodes, (200,), device=device)
+    receivers = torch.randint(0, num_nodes, (200,), device=device)
+    
+    return GraphsTuple(
+        nodes=nodes,
+        edges=torch.randn(200, 4, device=device),
+        receivers=receivers,
+        senders=senders,
+        n_node=torch.tensor([num_nodes], device=device),
+        n_edge=torch.tensor([200], device=device),
+    )
+
+
+@pytest.fixture
+def sample_grid_2d(device):
+    """Create a sample 2D grid for FNO tests."""
+    return torch.randn(2, 1, 32, 32, device=device)

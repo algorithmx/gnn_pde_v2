@@ -18,6 +18,27 @@ Jump to next version.
 
 ### Added
 
+- **Multiscale Components Test Suite** — `tests/test_multiscale.py`:
+  - Comprehensive test coverage for all multiscale components (59 tests total)
+  - `TestGraphPool` / `TestGraphUnpool`: Graph U-Nets pooling/unpooling (12 tests)
+  - `TestGraphUNetProcessor`: Graph U-Net processor with encoder-decoder architecture
+  - `TestMGKNProcessor`: MGKN V-cycle processor
+  - `TestMultiResolutionFNOBlock`: Parallel frequency band processing
+  - `TestUFNOBlock` / `TestMiniUNet`: U-FNO with spectral + local branches (11 tests)
+  - `TestHierarchicalFNOBlock`: Coarse-to-fine FNO processing
+  - `TestHierarchicalGraph`: MGKN hierarchy utilities
+  - `TestIntegration`: End-to-end multiscale model tests
+
+### Fixed
+
+- `components/spectral.py`: Added `padding` parameter to `_get_conv_nd()` for MiniUNet support
+- `components/multiscale/graph_pooling.py`: Fixed device handling and edge preservation during pooling
+- `components/multiscale/graph_unet.py`: Fixed device placement for dynamically created pool layers
+- `components/multiscale/mgkn_processor.py`: Fixed initialization and forward pass logic
+- `components/multiscale/spectral_multiscale.py`: Fixed MiniUNet skip connections (concatenate channels)
+- `components/multiscale/hierarchy.py`: Fixed device handling and removed duplicate code
+- `components/multiscale/__init__.py`: Added missing exports (`MiniUNet`, `restrict_to_coarse`, `prolong_to_fine`)
+
 ## [2.7.5] - 2026-03-16
 
 ### Added

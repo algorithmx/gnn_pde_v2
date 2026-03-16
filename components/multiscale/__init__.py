@@ -19,6 +19,8 @@ from .hierarchy import (
     HierarchicalGraph,
     build_hierarchical_graphs,
     compute_transition_matrix,
+    restrict_to_coarse,
+    prolong_to_fine,
 )
 from .graph_unet import GraphUNetProcessor
 from .mgkn_processor import MGKNProcessor
@@ -26,6 +28,7 @@ from .spectral_multiscale import (
     MultiResolutionFNOBlock,
     UFNOBlock,
     HierarchicalFNOBlock,
+    MiniUNet,
 )
 
 __all__ = [
@@ -36,6 +39,8 @@ __all__ = [
     "HierarchicalGraph",
     "build_hierarchical_graphs",
     "compute_transition_matrix",
+    "restrict_to_coarse",
+    "prolong_to_fine",
     # Processors
     "GraphUNetProcessor",
     "MGKNProcessor",
@@ -43,4 +48,5 @@ __all__ = [
     "MultiResolutionFNOBlock",
     "UFNOBlock",
     "HierarchicalFNOBlock",
+    "MiniUNet",
 ]

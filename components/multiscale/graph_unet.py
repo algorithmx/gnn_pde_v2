@@ -75,7 +75,8 @@ class GraphUNetBlock(nn.Module):
         
         # Pool if needed
         if self.pool_ratio < 1.0 and target_k is not None:
-            pool = GraphPool(k=target_k, feature_dim=self.latent_dim)
+            device = x.nodes.device if x.nodes is not None else torch.device('cpu')
+            pool = GraphPool(k=target_k, feature_dim=self.latent_dim).to(device)
             x, indices = pool(x)
             return x, indices
         

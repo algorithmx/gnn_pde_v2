@@ -36,17 +36,10 @@ class MGKNProcessor(nn.Module):
         self,
         latent_dim: int,
         n_levels: int = 3,
-        nodes_per_level: Optional[List[int]] = None | 待验证 | 待验证 | 待验证 | 待验证 | 100% | 待验证 |
-        P1修复 | 100% | ⏳ 待验证 |
-        P2修复 | 100% | ⏳ 待验证 |
-        P3修复 | 100% | ⏳ 待验证 |
-        P4修复 | 100% | ⏳ 待验证 |
-        P5修复 | 100% | ⏳ 待验证 |
-        P6修复 | 100% | ⏳ 待验证 |
-        P7修复 | 100% | ⏳ 待验证 |
-        P8修复 | 100% | ⏳ 待验证 |
-        P9修复 | 100% | ⏳ 待验证 |
-        
+        nodes_per_level: Optional[List[int]] = None,
+        hidden_dim: int = 128,
+        n_layers_per_level: int = 2,
+    ):
         super().__init__()
         self.latent_dim = latent_dim
         self.n_levels = n_levels
@@ -85,9 +78,16 @@ class MGKNProcessor(nn.Module):
             graphs.append(x)
             
             # Pool to next level
-            if i < len(self.nodes_per_level) - 1:
-                target_k = self.nodes_per_level[i + 1]
+            num_nodes = x.nodes.shape[0] if x.nodes is not None else 0
+            if i < len(self.nodes_per_level):
+                target_k = self.nodes_per_level[i]
+            else:
+                # Default: pool to half the nodes
+                target_k = num_nodes // 2
+            
+            if target_k < num_nodes:
                 pool = GraphPool(k=target_k, feature_dim=self.latent_dim)
+                pool = pool.to(x.nodes.device if x.nodes is not None else 'cpu')
                 x, indices = pool(x)
                 indices_list.append(indices)
         

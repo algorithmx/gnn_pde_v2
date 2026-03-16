@@ -65,6 +65,7 @@ def build_hierarchical_graphs(
     
     current_graph = graph
     num_nodes = graph.nodes.shape[0] if graph.nodes is not None else 0
+    device = graph.nodes.device if graph.nodes is not None else torch.device('cpu')
     
     for level in range(levels - 1):
         # Determine k for this level
@@ -73,8 +74,8 @@ def build_hierarchical_graphs(
         else:
             k = int(num_nodes * pooling_ratio)
         
-        # Create pool layer
-        pool = GraphPool(k=k, feature_dim=feature_dim)
+        # Create pool layer on the correct device
+        pool = GraphPool(k=k, feature_dim=feature_dim).to(device)
         
         # Pool current graph
         pooled_graph, indices = pool(current_graph)
@@ -83,34 +84,6 @@ def build_hierarchical_graphs(
         indices_list.append(indices)
         
         # Update for next iteration
-        current_graph = pooled_graph
-        num_nodes = pooled_graph.nodes.shape[0] if pooled_graph.nodes is not None else 0
-        
-        # 4.5 Free layer
-        if pooled_graph.nodes is not None:
-            # Store current graph as next level
-            graphs[level + 1] = pooled_graph
-            current_graph = pooled_graph
-            num_nodes = pooled_graph.nodes.shape[0]
-            
-            # Update for next iteration
-            graphs.append(pooled_graph)
-            
-            # Build hierarchy
-            hierarchy = HierarchicalGraph(
-                graphs=graphs,
-                indices_list=indices_list,
-            )
-            
-            # Update current
-            current_graph = pooled_graph
-            num_nodes = pooled_graph.nodes.shape[0]
-            
-            # Continue building
-            graphs.append(pooled_graph)
-        
-        # Update
-        graphs[level + 1] = pooled_graph
         current_graph = pooled_graph
         num_nodes = pooled_graph.nodes.shape[0] if pooled_graph.nodes is not None else 0
     
