@@ -6,6 +6,59 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+
+## [2.7.4] - 2026-03-16
+
+### Added
+
+- **Multiscale Architecture Support** — Complete implementation addressing code review issue 2.4:
+  - New module `components/multiscale/` with comprehensive multiscale processing capabilities.
+  
+  - **Graph Pooling/Unpooling** (`graph_pooling.py`):
+    - `GraphPool`: Adaptive pooling with trainable projection (Graph U-Nets style).
+    - `GraphUnpool`: Position-aware restoration using stored indices.
+    - Graph power augmentation (A^n) for improved connectivity.
+    - Based on Gao & Ji, "Graph U-Nets", ICML 2019.
+  
+  - **Hierarchical Graph Builder** (`hierarchy.py`):
+    - `HierarchicalGraph`: Container for multi-level graph representations.
+    - `build_hierarchical_graphs`: Automated hierarchy construction.
+    - `restrict_to_coarse` / `prolong_to_fine`: Level transition utilities.
+    - Based on Li et al., "Multipole Graph Neural Operator", NeurIPS 2020.
+  
+  - **Graph U-Net Processor** (`graph_unet.py`):
+    - `GraphUNetProcessor`: Encoder-decoder architecture with skip connections.
+    - Configurable pooling ratios and skip connection types (add/concat).
+    - Multi-level feature encoding for large-domain simulations.
+  
+  - **MGKN Processor** (`mgkn_processor.py`):
+    - `MGKNProcessor`: V-cycle algorithm with linear complexity O(N).
+    - Downward pass (fine→coarse) and upward pass (coarse→fine).
+    - Multi-resolution kernel decomposition for long-range interactions.
+  
+  - **Multi-Resolution Spectral Components** (`spectral_multiscale.py`):
+    - `MultiResolutionFNOBlock`: Parallel frequency band processing.
+    - `UFNOBlock`: U-FNO combining spectral (global) + U-Net (local) processing.
+    - `HierarchicalFNOBlock`: Coarse-to-fine FNO processing.
+    - `MiniUNet`: Local feature extraction for U-FNO.
+    - Super-resolution utilities for zero-shot resolution transfer.
+    - Based on Wen et al., "U-FNO", 2022.
+  
+  - **Complete Multiscale Models** (`models/multiscale_fno.py`):
+    - `MultiscaleFNO`: End-to-end model with architecture options:
+      - `"multiband"`: Multi-band frequency processing.
+      - `"ufno"`: U-FNO with local+global processing.
+      - `"hierarchical"`: Coarse-to-fine processing.
+    - Super-resolution inference support.
+
+### Fixed
+
+- **Code Review Issue 2.4 — No Multi-Scale Architecture Support**:
+  - ✅ Added U-Net style skip connections via `GraphUNetProcessor`.
+  - ✅ Added hierarchical graph pooling/unpooling via `GraphPool`, `GraphUnpool`, `MGKNProcessor`.
+  - ✅ Added multi-resolution processing via `MultiResolutionFNOBlock`, `HierarchicalFNOBlock`.
+  - Critical for turbulence, multi-physics, and large-domain simulations.
+
 ## [2.7.3] - 2026-03-16
 
 ### Fixed
