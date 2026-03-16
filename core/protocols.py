@@ -144,35 +144,49 @@ class GraphProcessor(Protocol):
 
 
 @runtime_checkable
-class Decoder(Protocol):
-    """Protocol for modules that decode a processed graph into a tensor.
-
-    ``query_positions`` is optional:
-
-    - Decoders that output at fixed node positions (e.g.
-      :class:`~gnn_pde_v2.components.MLPDecoder`) may ignore it.
-    - Probe-based decoders (e.g.
-      :class:`~gnn_pde_v2.components.ProbeDecoder`) require it and raise
-      ``ValueError`` when it is ``None``.
-
-    All implementations **must** accept ``query_positions`` as an optional
-    keyword argument so that generic pipelines (e.g.
-    :class:`~gnn_pde_v2.models.EncodeProcessDecode`) can call them uniformly.
-
+class NodeDecoder(Protocol):
+    """Protocol for decoders that output at fixed node positions.
+    
+    These decoders operate on the graph's existing nodes and do not require
+    arbitrary query positions. Examples include MLPDecoder and IndependentMLPDecoder.
+    
     Example::
+    
+        from gnn_pde_v2.core.protocols import NodeDecoder
+        from gnn_pde_v2.components import MLPDecoder
 
-        from gnn_pde_v2.core.protocols import Decoder
-        from gnn_pde_v2.components import MLPDecoder, ProbeDecoder
+        assert isinstance(MLPDecoder(128, 3), NodeDecoder)
+    """
 
-        assert isinstance(MLPDecoder(128, 3), Decoder)
-        assert isinstance(ProbeDecoder(128, out_dim=3), Decoder)
+    def forward(self, graph: GraphsTuple) -> Tensor: ...
+
+
+@runtime_checkable
+class QueryDecoder(Protocol):
+    """Protocol for decoders that output at arbitrary query positions.
+    
+    These decoders require explicit query_positions to determine where in space
+    to make predictions. Examples include ProbeDecoder.
+    
+    Example::
+    
+        from gnn_pde_v2.core.protocols import QueryDecoder
+        from gnn_pde_v2.components import ProbeDecoder
+        
+        assert isinstance(ProbeDecoder(128, out_dim=3), QueryDecoder)
     """
 
     def forward(
         self,
         graph: GraphsTuple,
-        query_positions: Optional[Tensor] = None,
+        query_positions: Tensor,
     ) -> Tensor: ...
+
+
+# Backwards-compatible type alias
+# Note: This is a Union type for backwards compatibility.
+# New code should use NodeDecoder or QueryDecoder explicitly.
+Decoder = Union[NodeDecoder, QueryDecoder]
 
 
 @runtime_checkable
@@ -235,7 +249,9 @@ __all__ = [
     # Graph-world
     "GraphEncoder",
     "GraphProcessor",
-    "Decoder",
+    "NodeDecoder",
+    "QueryDecoder",
+    "Decoder",  # Backwards-compatible alias
     "GraphModel",
     # Grid-world
     "PositionEncoder",

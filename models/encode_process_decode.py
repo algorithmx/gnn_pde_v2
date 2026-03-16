@@ -4,9 +4,8 @@ Encode-Process-Decode architecture.
 Core pattern from DeepMind Graph Nets.
 """
 
-from typing import Optional, Union
+from typing import Optional
 import torch
-import torch.nn as nn
 from ..core.graph import GraphsTuple
 from ..core.base import BaseModel
 from ..core.protocols import GraphEncoder, GraphProcessor, Decoder
@@ -38,9 +37,9 @@ class EncodeProcessDecode(BaseModel):
     
     def __init__(
         self,
-        encoder: Union[GraphEncoder, nn.Module],
-        processor: Union[GraphProcessor, nn.Module],
-        decoder: Union[Decoder, nn.Module],
+        encoder: GraphEncoder,
+        processor: GraphProcessor,
+        decoder: Decoder,
     ):
         super().__init__()
         

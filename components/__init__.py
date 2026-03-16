@@ -67,6 +67,8 @@ from .spectral import FNOProcessor, SpectralConv, SeparableSpectralConv, Spectra
 from ..core.protocols import (
     GraphEncoder,
     GraphProcessor,
+    NodeDecoder,
+    QueryDecoder,
     Decoder,
     GraphModel,
     PositionEncoder,
@@ -111,6 +113,8 @@ __all__ = [
     # Structural protocols
     "GraphEncoder",
     "GraphProcessor",
+    "NodeDecoder",
+    "QueryDecoder",
     "Decoder",
     "GraphModel",
     "PositionEncoder",

@@ -6,6 +6,25 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.7.3] - 2026-03-16
+
+### Fixed
+
+- **Protocol Inconsistency (Issue 1.1)** — Strict Protocol Enforcement:
+  - Changed `EncodeProcessDecode` to use strict protocol types instead of `Union[Protocol, nn.Module]`.
+  - Split `Decoder` protocol into `NodeDecoder` (fixed-node decoders) and `QueryDecoder` (query-based decoders).
+  - `Decoder` is now a backwards-compatible Union type alias: `Union[NodeDecoder, QueryDecoder]`.
+  - Updated exports in `core/__init__.py` and `components/__init__.py`.
+  - See `docs/PROTOCOL_FIX_SUMMARY.md` for detailed migration guide.
+
+### Changed
+
+- **Type Safety Improvements**:
+  - `EncodeProcessDecode.__init__()` now enforces structural typing via Protocols.
+  - `ProbeDecoder` now requires `query_positions: Tensor` (not Optional) at the protocol level.
+  - All existing components satisfy their protocols via duck typing (no inheritance changes needed).
+
+
 ## [2.7.2] - 2026-03-16
 
 ### Added
