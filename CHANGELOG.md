@@ -10,6 +10,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- **`core/mlp.py` — Extended Normalization Options**:
+  - Added support for `BatchNorm1d` (`'batch'`), `InstanceNorm1d` (`'instance'`), and
+    `GroupNorm` (`'group'`) in addition to existing `LayerNorm` support.
+  - Dict-based configuration for fine-grained control (e.g., `{'type': 'group', 'num_groups': 4}`).
+  - Auto-adjustment of `num_groups` for GroupNorm when dimension is not divisible.
+  - Useful for PDE solvers: BatchNorm for stable training, InstanceNorm for style-transfer-like
+    physics, GroupNorm for small batch regimes.
+
+## [2.7.1] - 2026-03-16
+
+### Added
+
 - **`components/transformer.py` — Relative Position Encoding (RPE)**:
   - Added `RelativePositionEncoding` class with support for learned and sinusoidal
     position embeddings based on pairwise spatial distances.

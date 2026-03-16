@@ -30,12 +30,21 @@ class MLP(nn.Module):
         in_dim: Input dimension
         out_dim: Output dimension
         hidden_dims: List of hidden layer dimensions
-        activation: Hidden-layer activation spec
-        dropout: Hidden-layer dropout spec
-        norm: Hidden-layer normalization spec
-        final_activation: Output-layer activation spec
-        final_dropout: Output-layer dropout
-        final_norm: Output-layer normalization spec
+        activation: Hidden-layer activation spec. Can be: 'relu', 'gelu', 'silu', 
+            'tanh', 'sigmoid', 'sin', nn.Module, callable, or None.
+        dropout: Hidden-layer dropout spec (float or sequence of floats)
+        norm: Hidden-layer normalization spec. Can be:
+            - None: no normalization
+            - 'layer': LayerNorm (default when use_layer_norm=True)
+            - 'batch': BatchNorm1d (for stable training across batch sizes)
+            - 'instance': InstanceNorm1d (for style-transfer-like physics)
+            - 'group': GroupNorm (for small batch regimes, default 8 groups)
+            - dict: {'type': 'group', 'num_groups': 4} for configurable options
+            - nn.Module: custom normalization module
+            - Callable: factory function returning nn.Module
+        final_activation: Output-layer activation spec (same options as `activation`)
+        final_dropout: Output-layer dropout (float)
+        final_norm: Output-layer normalization spec (same options as `norm`)
         norms: Per-layer normalization specs (overrides norm/final_norm if provided)
         linear_factory: Callable creating the affine layer for each stage
         use_layer_norm: Backward-compatible alias for hidden LayerNorm behavior
@@ -66,6 +75,15 @@ class MLP(nn.Module):
         >>> # Pre-activation pattern (Act → Linear) for AdaLN-style modulation
         >>> mlp = MLP(64, 192, hidden_dims=[], pre_activation='silu')
         >>> # Produces: SiLU → Linear(64, 192)
+        >>>
+        >>> # Batch normalization for stable training
+        >>> mlp = MLP(64, 64, hidden_dims=[128, 128], norm='batch')
+        >>>
+        >>> # Group normalization with custom groups
+        >>> mlp = MLP(64, 64, hidden_dims=[128, 128], norm={'type': 'group', 'num_groups': 4})
+        >>>
+        >>> # Mixed normalization per layer
+        >>> mlp = MLP(64, 64, hidden_dims=[128, 128], norms=['batch', 'layer', None])
     """
 
     def __init__(
@@ -211,20 +229,75 @@ class MLP(nn.Module):
 
     @staticmethod
     def _make_norm(spec: Any, dim: int) -> Optional[nn.Module]:
+        """
+        Create a normalization module from a specification.
+        
+        Args:
+            spec: Normalization specification. Can be:
+                - None: returns None
+                - str: 'layer', 'batch', 'instance', 'group'
+                - dict: {'type': 'group', 'num_groups': 4, ...}
+                - nn.Module: returned as-is
+                - Callable: called with dim to create module
+            dim: Feature dimension (number of channels)
+            
+        Returns:
+            Normalization module or None
+        """
         if spec is None:
             return None
         if isinstance(spec, nn.Module):
             return spec
         if isinstance(spec, str):
-            if spec == 'layer':
-                return nn.LayerNorm(dim)
-            raise ValueError(f"Unknown normalization spec: {spec}")
+            mapping = {
+                'layer': nn.LayerNorm(dim),
+                'batch': nn.BatchNorm1d(dim),
+                'instance': nn.InstanceNorm1d(dim, affine=True),
+                'group': nn.GroupNorm(num_groups=min(8, dim), num_channels=dim),
+            }
+            if spec not in mapping:
+                raise ValueError(
+                    f"Unknown normalization spec: {spec!r}. "
+                    f"Supported: 'layer', 'batch', 'instance', 'group', or None"
+                )
+            return mapping[spec]
+        if isinstance(spec, dict):
+            norm_type = spec.get('type')
+            # Extract extra kwargs excluding 'type' (and 'num_groups' for group norm)
+            if norm_type == 'layer':
+                kwargs = {k: v for k, v in spec.items() if k != 'type'}
+                return nn.LayerNorm(dim, **kwargs)
+            elif norm_type == 'batch':
+                kwargs = {k: v for k, v in spec.items() if k != 'type'}
+                return nn.BatchNorm1d(dim, **kwargs)
+            elif norm_type == 'instance':
+                kwargs = {k: v for k, v in spec.items() if k != 'type'}
+                # Ensure affine=True by default for instance norm
+                if 'affine' not in kwargs:
+                    kwargs['affine'] = True
+                return nn.InstanceNorm1d(dim, **kwargs)
+            elif norm_type == 'group':
+                num_groups = spec.get('num_groups', min(8, dim))
+                # Adjust num_groups to be a valid divisor of dim
+                if dim % num_groups != 0:
+                    # Find the largest divisor of dim that is <= num_groups
+                    for g in range(num_groups, 0, -1):
+                        if dim % g == 0:
+                            num_groups = g
+                            break
+                kwargs = {k: v for k, v in spec.items() if k not in ('type', 'num_groups')}
+                return nn.GroupNorm(num_groups=num_groups, num_channels=dim, **kwargs)
+            else:
+                raise ValueError(
+                    f"Unknown norm type in dict spec: {norm_type!r}. "
+                    f"Supported: 'layer', 'batch', 'instance', 'group'"
+                )
         if callable(spec):
             module = spec(dim)
             if not isinstance(module, nn.Module):
                 raise ValueError("Callable norm spec must return nn.Module")
             return module
-        raise ValueError(f"Unsupported normalization spec: {spec}")
+        raise ValueError(f"Unsupported normalization spec: {spec!r}")
 
     @property
     def layers(self) -> nn.Sequential:

@@ -112,6 +112,126 @@ class TestMLP:
         out = mlp(x)
         assert out.shape == (2, 6, 16, 16)
 
+    def test_batch_norm(self, device):
+        """Test BatchNorm1d normalization."""
+        mlp = MLP(10, 5, [12, 12], norm='batch').to(device)
+        x = torch.randn(4, 10, device=device)
+        
+        # Training mode
+        mlp.train()
+        out1 = mlp(x)
+        out2 = mlp(x)
+        # Outputs should differ slightly due to running stats update
+        
+        # Eval mode
+        mlp.eval()
+        out3 = mlp(x)
+        out4 = mlp(x)
+        # Outputs should be same in eval mode
+        assert torch.allclose(out3, out4)
+        assert out3.shape == (4, 5)
+
+    def test_instance_norm(self, device):
+        """Test InstanceNorm1d normalization."""
+        mlp = MLP(10, 5, [12, 12], norm='instance').to(device)
+        x = torch.randn(4, 10, device=device)
+        
+        out = mlp(x)
+        assert out.shape == (4, 5)
+        
+        # Check that InstanceNorm1d modules exist
+        norm_modules = [m for m in mlp.modules() if isinstance(m, nn.InstanceNorm1d)]
+        assert len(norm_modules) == 2  # 2 hidden layers
+
+    def test_group_norm(self, device):
+        """Test GroupNorm normalization."""
+        mlp = MLP(64, 32, [128, 128], norm='group').to(device)
+        x = torch.randn(4, 64, device=device)
+        
+        out = mlp(x)
+        assert out.shape == (4, 32)
+        
+        # Check that GroupNorm modules exist
+        norm_modules = [m for m in mlp.modules() if isinstance(m, nn.GroupNorm)]
+        assert len(norm_modules) == 2  # 2 hidden layers
+
+    def test_group_norm_custom_groups(self, device):
+        """Test GroupNorm with custom number of groups via dict spec."""
+        mlp = MLP(64, 32, [128], norm={'type': 'group', 'num_groups': 4}).to(device)
+        x = torch.randn(4, 64, device=device)
+        
+        out = mlp(x)
+        assert out.shape == (4, 32)
+        
+        # Check GroupNorm has correct num_groups
+        norm_modules = [m for m in mlp.modules() if isinstance(m, nn.GroupNorm)]
+        assert len(norm_modules) == 1
+        assert norm_modules[0].num_groups == 4
+
+    def test_group_norm_auto_adjust_groups(self, device):
+        """Test that GroupNorm auto-adjusts num_groups when dim is not divisible."""
+        # 10 is not divisible by 8 (default), should adjust to 5 or 2 or 1
+        mlp = MLP(10, 5, [12], norm='group').to(device)
+        x = torch.randn(4, 10, device=device)
+        
+        out = mlp(x)
+        assert out.shape == (4, 5)
+
+    def test_batch_norm_with_kwargs(self, device):
+        """Test BatchNorm1d with custom kwargs via dict spec."""
+        mlp = MLP(10, 5, [12], norm={'type': 'batch', 'eps': 1e-4, 'momentum': 0.01}).to(device)
+        x = torch.randn(4, 10, device=device)
+        
+        out = mlp(x)
+        assert out.shape == (4, 5)
+        
+        # Check BatchNorm has correct eps
+        norm_modules = [m for m in mlp.modules() if isinstance(m, nn.BatchNorm1d)]
+        assert len(norm_modules) == 1
+        assert norm_modules[0].eps == 1e-4
+        assert norm_modules[0].momentum == 0.01
+
+    def test_layer_norm_with_kwargs(self, device):
+        """Test LayerNorm with custom kwargs via dict spec."""
+        mlp = MLP(10, 5, [12], norm={'type': 'layer', 'eps': 1e-5, 'elementwise_affine': False}).to(device)
+        x = torch.randn(4, 10, device=device)
+        
+        out = mlp(x)
+        assert out.shape == (4, 5)
+        
+        # Check LayerNorm has correct settings
+        norm_modules = [m for m in mlp.modules() if isinstance(m, nn.LayerNorm)]
+        assert len(norm_modules) == 1
+        assert norm_modules[0].eps == 1e-5
+        assert norm_modules[0].elementwise_affine is False
+
+    def test_mixed_normalization_per_layer(self, device):
+        """Test different normalization types per layer."""
+        mlp = MLP(10, 5, [12, 12], norms=['batch', 'layer', 'group']).to(device)
+        x = torch.randn(4, 10, device=device)
+        
+        out = mlp(x)
+        assert out.shape == (4, 5)
+        
+        # Check each norm type exists
+        batch_norms = [m for m in mlp.modules() if isinstance(m, nn.BatchNorm1d)]
+        layer_norms = [m for m in mlp.modules() if isinstance(m, nn.LayerNorm)]
+        group_norms = [m for m in mlp.modules() if isinstance(m, nn.GroupNorm)]
+        
+        assert len(batch_norms) == 1
+        assert len(layer_norms) == 1
+        assert len(group_norms) == 1
+
+    def test_unknown_norm_spec_raises(self, device):
+        """Test that unknown norm spec raises ValueError."""
+        with pytest.raises(ValueError, match="Unknown normalization spec"):
+            MLP(10, 5, [12], norm='unknown_norm')
+
+    def test_unknown_norm_dict_type_raises(self, device):
+        """Test that unknown norm type in dict spec raises ValueError."""
+        with pytest.raises(ValueError, match="Unknown norm type in dict spec"):
+            MLP(10, 5, [12], norm={'type': 'unknown'})
+
 
 class TestResidual:
     """Test Residual wrapper."""
