@@ -64,7 +64,8 @@ from .transformer import (
     TransformerBlock, TransformerProcessor,
 )
 from .attention import (
-    MultiHeadAttention, PhysicsTokenAttention,
+    MultiHeadAttention, PhysicsTokenAttention, PhysicsTokenAttentionV3,
+    TiledSliceOperation,
     QKNormMultiHeadAttention, SparseGraphAttention, RelativePositionEncoding,
 )
 from .conditioning import (
@@ -125,6 +126,8 @@ __all__ = [
     "TransformerProcessor",
     "MultiHeadAttention",
     "PhysicsTokenAttention",
+    "PhysicsTokenAttentionV3",
+    "TiledSliceOperation",
     "QKNormMultiHeadAttention",
     "SparseGraphAttention",
     "RelativePositionEncoding",

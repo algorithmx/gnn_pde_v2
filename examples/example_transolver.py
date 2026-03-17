@@ -16,8 +16,10 @@ Key Innovation:
 Transolver introduces "Physics-Attention" which reduces attention complexity
 from O(N²) to O(N×G + G²) where G << N (number of physics tokens).
 
-This implementation uses the gnn_pde_v2 framework components where applicable
-while maintaining exact equivalence to the original Transolver architecture.
+This implementation uses the gnn_pde_v2 framework components:
+- PhysicsTokenAttention: Framework's implementation with paper-faithful defaults
+- MLP: Framework's MLP component
+- AutoRegisterModel: Framework's model registration
 """
 
 import torch
@@ -26,8 +28,93 @@ import numpy as np
 from typing import Optional
 
 # Import framework components
-from gnn_pde_v2.core import AutoRegisterModel
-from gnn_pde_v2.core import MLP
+from gnn_pde_v2.core import AutoRegisterModel, MLP
+from gnn_pde_v2.components.attention import PhysicsTokenAttention
+
+
+class TransolverBlock(nn.Module):
+    """
+    Transolver transformer block using framework's PhysicsTokenAttention.
+
+    Uses paper-faithful defaults:
+    - use_slice_normalization=True: Critical for proper token aggregation
+    - use_learnable_tokens=False: Paper doesn't use learnable token bias
+    - qkv_mode='direct': Uses per-head Q/K/V linears as in paper
+    - use_orthogonal_init=True: Orthogonal init for slice projection
+    - temperature=0.5: Paper's default temperature
+    - temperature_mode='learnable_scalar': Paper's learnable temperature
+
+    Parity notes vs upstream `external_research/Transolver/.../models/Transolver.py`:
+    - Upstream defines both `mlp` and `mlp_new`, but only `mlp` is used in the forward pass.
+      We intentionally implement just the used path.
+    - Feed-forward is a 2-linear mapping with an activation in between; we keep `use_layer_norm=False`
+      to avoid introducing extra normalization.
+    """
+    
+    def __init__(
+        self,
+        num_heads: int,
+        hidden_dim: int,
+        dropout: float,
+        act: str = 'gelu',
+        mlp_ratio: float = 4.0,
+        last_layer: bool = False,
+        out_dim: int = 1,
+        slice_num: int = 32,
+    ):
+        super().__init__()
+        
+        self.last_layer = last_layer
+        
+        self.ln_1 = nn.LayerNorm(hidden_dim)
+        
+        # Use framework's PhysicsTokenAttention with paper-faithful defaults
+        self.attn = PhysicsTokenAttention(
+            dim=hidden_dim,
+            n_tokens=slice_num,
+            n_heads=num_heads,
+            dropout=dropout,
+            temperature=0.5,               # Paper default
+            temperature_mode='learnable_scalar',  # Matches paper's learnable temp
+            # Paper-fidelity options:
+            use_slice_normalization=True,  # Critical from paper
+            use_learnable_tokens=False,     # Paper doesn't use this
+            qkv_mode='direct',              # Paper-faithful QKV
+            use_orthogonal_init=True,       # Recommended in paper
+        )
+        
+        self.ln_2 = nn.LayerNorm(hidden_dim)
+        
+        # Feed-forward network using framework's MLP
+        self.mlp = MLP(
+            in_dim=hidden_dim,
+            out_dim=hidden_dim,
+            hidden_dims=[int(hidden_dim * mlp_ratio)],
+            activation=act,
+            use_layer_norm=False,
+        )
+        
+        if last_layer:
+            self.ln_3 = nn.LayerNorm(hidden_dim)
+            self.mlp2 = nn.Linear(hidden_dim, out_dim)
+    
+    def forward(self, fx: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            fx: [B, N, hidden_dim]
+        Returns:
+            [B, N, out_dim] if last_layer else [B, N, hidden_dim]
+        """
+        # Attention with residual
+        fx = self.attn(self.ln_1(fx)) + fx
+        
+        # MLP with residual using framework component
+        fx = self.mlp(self.ln_2(fx)) + fx
+        
+        if self.last_layer:
+            return self.mlp2(self.ln_3(fx))
+        else:
+            return fx
 
 
 class Transolver(AutoRegisterModel, name='transolver', namespace='example'):
@@ -46,6 +133,7 @@ class Transolver(AutoRegisterModel, name='transolver', namespace='example'):
             ↓
         Transolver Blocks × n_layers:
             - Physics-Attention: Slice → Attend(G tokens) → Deslice
+              (using framework's PhysicsTokenAttention with paper defaults)
             - Feed-Forward: Framework's MLP on each point
             - LayerNorm + Residual
             ↓
@@ -104,7 +192,7 @@ class Transolver(AutoRegisterModel, name='transolver', namespace='example'):
             (1.0 / n_hidden) * torch.rand(n_hidden, dtype=torch.float)
         )
         
-        # Transolver blocks
+        # Transolver blocks using framework's PhysicsTokenAttention
         self.blocks = nn.ModuleList([
             TransolverBlock(
                 num_heads=n_head,
@@ -202,167 +290,6 @@ class Transolver(AutoRegisterModel, name='transolver', namespace='example'):
         }
 
 
-class PhysicsAttentionIrregularMesh(nn.Module):
-    """
-    Physics-Attention mechanism - the key innovation of Transolver.
-    
-    This implements the "slice-attention-deslice" paradigm.
-    Complexity: O(N×G + G² + G×D²) instead of O(N²) for full attention
-    """
-    
-    def __init__(
-        self,
-        dim: int,
-        heads: int = 8,
-        dim_head: int = 64,
-        dropout: float = 0.0,
-        slice_num: int = 64,
-    ):
-        super().__init__()
-        
-        inner_dim = dim_head * heads
-        self.dim_head = dim_head
-        self.heads = heads
-        self.scale = dim_head ** -0.5
-        self.slice_num = slice_num
-        
-        # Temperature parameter for softmax (learnable)
-        self.temperature = nn.Parameter(torch.ones([1, heads, 1, 1]) * 0.5)
-        
-        # Two-branch projection for slice
-        self.in_project_x = nn.Linear(dim, inner_dim)
-        self.in_project_fx = nn.Linear(dim, inner_dim)
-        self.in_project_slice = nn.Linear(dim_head, slice_num)
-        
-        # Orthogonal initialization for slice projection
-        nn.init.orthogonal_(self.in_project_slice.weight)
-        
-        # Q, K, V projections for attention on tokens
-        self.to_q = nn.Linear(dim_head, dim_head, bias=False)
-        self.to_k = nn.Linear(dim_head, dim_head, bias=False)
-        self.to_v = nn.Linear(dim_head, dim_head, bias=False)
-        
-        self.to_out = nn.Sequential(
-            nn.Linear(inner_dim, dim),
-            nn.Dropout(dropout),
-        )
-        
-        self.softmax = nn.Softmax(dim=-1)
-        self.dropout = nn.Dropout(dropout)
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Physics-Attention forward pass.
-        
-        Args:
-            x: [B, N, C] - Input features at N points
-            
-        Returns:
-            [B, N, C] - Output features
-        """
-        B, N, C = x.shape
-        H = self.heads
-        
-        # (1) Slice: Project N points to G tokens
-        fx_mid = self.in_project_fx(x).reshape(B, N, H, self.dim_head)
-        fx_mid = fx_mid.permute(0, 2, 1, 3).contiguous()
-        
-        x_mid = self.in_project_x(x).reshape(B, N, H, self.dim_head)
-        x_mid = x_mid.permute(0, 2, 1, 3).contiguous()
-        
-        # Compute slice weights (assignment to tokens)
-        slice_weights = self.softmax(self.in_project_slice(x_mid) / self.temperature)
-        slice_norm = slice_weights.sum(dim=2)
-        
-        # Slice: weighted sum of points to form tokens
-        slice_token = torch.einsum("bhnc,bhng->bhgc", fx_mid, slice_weights)
-        slice_token = slice_token / (slice_norm[:, :, :, None] + 1e-5)
-        
-        # (2) Attention among slice tokens
-        q_slice = self.to_q(slice_token)
-        k_slice = self.to_k(slice_token)
-        v_slice = self.to_v(slice_token)
-        
-        dots = torch.matmul(q_slice, k_slice.transpose(-1, -2)) * self.scale
-        attn = self.softmax(dots)
-        attn = self.dropout(attn)
-        
-        out_slice = torch.matmul(attn, v_slice)
-        
-        # (3) Deslice: Distribute back to N points
-        out_x = torch.einsum("bhgc,bhng->bhnc", out_slice, slice_weights)
-        out_x = out_x.permute(0, 2, 1, 3).reshape(B, N, -1)
-        
-        return self.to_out(out_x)
-
-
-class TransolverBlock(nn.Module):
-    """Transolver transformer block with Physics-Attention.
-
-    Parity notes vs upstream `external_research/Transolver/.../models/Transolver.py`:
-    - Upstream defines both `mlp` and `mlp_new`, but only `mlp` is used in the forward pass.
-      We intentionally implement just the used path.
-    - Feed-forward is a 2-linear mapping with an activation in between; we keep `use_layer_norm=False`
-      to avoid introducing extra normalization.
-    """
-    
-    def __init__(
-        self,
-        num_heads: int,
-        hidden_dim: int,
-        dropout: float,
-        act: str = 'gelu',
-        mlp_ratio: float = 4.0,
-        last_layer: bool = False,
-        out_dim: int = 1,
-        slice_num: int = 32,
-    ):
-        super().__init__()
-        
-        self.last_layer = last_layer
-        
-        self.ln_1 = nn.LayerNorm(hidden_dim)
-        self.attn = PhysicsAttentionIrregularMesh(
-            dim=hidden_dim,
-            heads=num_heads,
-            dim_head=hidden_dim // num_heads,
-            dropout=dropout,
-            slice_num=slice_num,
-        )
-        
-        self.ln_2 = nn.LayerNorm(hidden_dim)
-        # Use framework's MLP for feed-forward network
-        self.mlp = MLP(
-            in_dim=hidden_dim,
-            out_dim=hidden_dim,
-            hidden_dims=[int(hidden_dim * mlp_ratio)],
-            activation=act,
-            use_layer_norm=False,
-        )
-        
-        if last_layer:
-            self.ln_3 = nn.LayerNorm(hidden_dim)
-            self.mlp2 = nn.Linear(hidden_dim, out_dim)
-    
-    def forward(self, fx: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            fx: [B, N, hidden_dim]
-        Returns:
-            [B, N, out_dim] if last_layer else [B, N, hidden_dim]
-        """
-        # Attention with residual
-        fx = self.attn(self.ln_1(fx)) + fx
-        
-        # MLP with residual using framework component
-        fx = self.mlp(self.ln_2(fx)) + fx
-        
-        if self.last_layer:
-            return self.mlp2(self.ln_3(fx))
-        else:
-            return fx
-
-
 # ============================================================================
 # Usage Example
 # ============================================================================
@@ -417,6 +344,16 @@ def example_usage():
     print(f"  Input shape: {x.shape}")
     print(f"  Position shape: {pos.shape}")
     print(f"  Output shape: {output.shape}")
+    
+    # Show framework integration
+    first_block = model.blocks[0]
+    print(f"\nFramework Integration:")
+    print(f"  Using PhysicsTokenAttention: {type(first_block.attn).__name__}")
+    print(f"  Paper-faithful settings:")
+    print(f"    - use_slice_normalization: {first_block.attn.use_slice_normalization}")
+    print(f"    - use_learnable_tokens: {first_block.attn.use_learnable_tokens}")
+    print(f"    - qkv_mode: {first_block.attn.qkv_mode}")
+    print(f"    - temperature_mode: {first_block.attn.temperature_mode}")
     
     print("\n" + "=" * 60)
     print("Model registered as:", model._model_name)
