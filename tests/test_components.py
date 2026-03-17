@@ -740,14 +740,46 @@ class TestIndependentMLPDecoder:
 
 
 class TestProbeDecoder:
-    """Test ProbeDecoder."""
+    """Test ProbeDecoder with configurable processors."""
 
-    def test_forward(self, device):
-        """Test probe-based decoding."""
+    def test_with_graphnet_block(self, device):
+        """Test probe decoder with GraphNetBlock processor."""
         decoder = ProbeDecoder(
             latent_dim=16,
-            edge_dim=8,
+            processor=GraphNetBlock(latent_dim=16, hidden_dim=32),
             out_dim=3,
+            k_nearest=3,
+        ).to(device)
+
+        # Source graph
+        graph = GraphsTuple(
+            nodes=torch.randn(10, 16, device=device),
+            edges=torch.randn(30, 16, device=device),
+            senders=torch.randint(0, 10, (30,), device=device),
+            receivers=torch.randint(0, 10, (30,), device=device),
+            positions=torch.randn(10, 2, device=device),
+            n_node=torch.tensor([10], device=device),
+            n_edge=torch.tensor([30], device=device),
+        )
+
+        # Query positions
+        query_positions = torch.randn(5, 2, device=device)
+
+        out = decoder(graph, query_positions)
+        assert out.shape == (5, 3)
+
+    def test_with_gen_blocks(self, device):
+        """Test probe decoder with GENBlock processors."""
+        processor = torch.nn.ModuleList([
+            GENBlock(latent_dim=16, hidden_dim=32, num_mlp_layers=2)
+            for _ in range(3)
+        ])
+        
+        decoder = ProbeDecoder(
+            latent_dim=16,
+            processor=processor,
+            edge_encoder=LearnableRBFEncoder(num_kernels=10),
+            out_dim=1,
             k_nearest=3,
         ).to(device)
 
@@ -762,8 +794,208 @@ class TestProbeDecoder:
         query_positions = torch.randn(5, 2, device=device)
 
         out = decoder(graph, query_positions)
+        assert out.shape == (5, 1)
 
-        assert out.shape == (5, 3)
+    def test_with_query_features(self, device):
+        """Test probe decoder with query input features."""
+        decoder = ProbeDecoder(
+            latent_dim=16,
+            processor=GraphNetBlock(latent_dim=16, hidden_dim=32),
+            out_dim=1,
+            k_nearest=3,
+            decode_with_query_features=True,
+        ).to(device)
+        
+        # Adjust output MLP to handle concatenated features
+        decoder.output_mlp = torch.nn.Linear(16 + 4, 1).to(device)
+
+        # Source graph
+        graph = GraphsTuple(
+            nodes=torch.randn(10, 16, device=device),
+            edges=torch.randn(30, 16, device=device),
+            senders=torch.randint(0, 10, (30,), device=device),
+            receivers=torch.randint(0, 10, (30,), device=device),
+            positions=torch.randn(10, 2, device=device),
+            n_node=torch.tensor([10], device=device),
+            n_edge=torch.tensor([30], device=device),
+        )
+
+        # Query positions and features
+        query_positions = torch.randn(5, 2, device=device)
+        query_features = torch.randn(5, 4, device=device)
+
+        out = decoder(graph, query_positions, query_features)
+        assert out.shape == (5, 1)
+
+
+class TestWindFarmGNO:
+    """Test paper-faithful WindFarmGNO."""
+    
+    def test_forward(self, device):
+        """Test WindFarmGNO forward pass."""
+        model = WindFarmGNO(
+            num_turbine_features=10,
+            num_edge_features=4,
+            num_probe_features=6,
+            latent_dim=32,
+            hidden_dim=32,
+            num_mlp_layers=2,
+            wt_message_passing_steps=2,
+            probe_message_passing_steps=2,
+            k_neighbors=3,
+            use_rbf=True,
+        ).to(device)
+        
+        # Turbine graph
+        num_turbines = 5
+        edge_list = [[i, j] for i in range(num_turbines) for j in range(num_turbines) if i != j]
+        edge_index = torch.tensor(edge_list, dtype=torch.long, device=device).t()
+        
+        turbine_graph = GraphsTuple(
+            nodes=torch.randn(num_turbines, 10, device=device),
+            edges=torch.randn(edge_index.shape[1], 4, device=device),
+            senders=edge_index[0],
+            receivers=edge_index[1],
+            positions=torch.randn(num_turbines, 2, device=device),
+            n_node=torch.tensor([num_turbines], device=device),
+            n_edge=torch.tensor([edge_index.shape[1]], device=device),
+        )
+        
+        # Probe inputs
+        probe_positions = torch.randn(10, 2, device=device)
+        probe_features = torch.randn(10, 6, device=device)
+        
+        # Forward
+        output = model(turbine_graph, probe_positions, probe_features)
+        
+        assert 'turbine' in output
+        assert 'probe' in output
+        assert output['turbine'].shape == (num_turbines, 1)
+        assert output['probe'].shape == (10, 1)
+
+
+class TestLearnableRBFEncoder:
+    """Test LearnableRBFEncoder."""
+    
+    def test_forward(self, device):
+        """Test RBF encoding."""
+        encoder = LearnableRBFEncoder(
+            num_kernels=20,
+            d_min=0.0,
+            d_max=5.0,
+            learnable=True,
+        ).to(device)
+        
+        distances = torch.tensor([0.5, 1.0, 2.0, 3.0], device=device)
+        rbf_features = encoder(distances)
+        
+        assert rbf_features.shape == (4, 20)
+        assert encoder.mu.requires_grad
+        assert encoder.beta.requires_grad
+    
+    def test_cosine_cutoff(self, device):
+        """Test cosine cutoff function."""
+        encoder = LearnableRBFEncoder(d_max=5.0, learnable=False).to(device)
+        
+        # Inside cutoff range
+        d_inside = torch.tensor([0.0, 2.5, 4.9], device=device)
+        cutoff_inside = encoder.cosine_cutoff(d_inside)
+        assert (cutoff_inside > 0).all()
+        
+        # At cutoff boundary
+        d_boundary = torch.tensor([5.0], device=device)
+        cutoff_boundary = encoder.cosine_cutoff(d_boundary)
+        assert cutoff_boundary.item() == 0.0
+        
+        # Outside cutoff range
+        d_outside = torch.tensor([5.1, 10.0], device=device)
+        cutoff_outside = encoder.cosine_cutoff(d_outside)
+        assert (cutoff_outside == 0).all()
+
+
+class TestProbeGraphBuilder:
+    """Test ProbeGraphBuilder utility."""
+    
+    def test_build(self, device):
+        """Test probe graph construction."""
+        source_pos = torch.randn(10, 2, device=device)
+        source_feat = torch.randn(10, 16, device=device)
+        query_pos = torch.randn(5, 2, device=device)
+        
+        probe_graph = ProbeGraphBuilder.build(
+            source_positions=source_pos,
+            source_features=source_feat,
+            query_positions=query_pos,
+            k_nearest=3,
+        )
+        
+        # Check layout: [source_nodes | probe_nodes]
+        assert probe_graph.nodes.shape == (15, 16)  # 10 source + 5 probe
+        assert probe_graph.n_node.item() == 15
+        assert probe_graph.n_edge.item() == 5 * 3  # 5 queries * 3 neighbors
+        
+        # Check edge structure: source -> probe
+        # Senders should be in [0, 10), receivers in [10, 15)
+        assert (probe_graph.senders < 10).all()
+        assert (probe_graph.receivers >= 10).all()
+    
+    def test_extract_probe_nodes(self, device):
+        """Test probe node extraction."""
+        # Create batched probe graph
+        graph1 = GraphsTuple(
+            nodes=torch.randn(15, 16, device=device),  # 10 source + 5 probe
+            edges=torch.randn(15, 1, device=device),
+            senders=torch.randint(0, 10, (15,), device=device),
+            receivers=torch.randint(10, 15, (15,), device=device),
+            n_node=torch.tensor([15], device=device),
+            n_edge=torch.tensor([15], device=device),
+        )
+        graph2 = GraphsTuple(
+            nodes=torch.randn(18, 16, device=device),  # 12 source + 6 probe
+            edges=torch.randn(18, 1, device=device),
+            senders=torch.randint(0, 12, (18,), device=device),
+            receivers=torch.randint(12, 18, (18,), device=device),
+            n_node=torch.tensor([18], device=device),
+            n_edge=torch.tensor([18], device=device),
+        )
+        
+        from gnn_pde_v2.core.graph import batch_graphs
+        batched = batch_graphs([graph1, graph2])
+        n_query = torch.tensor([5, 6], device=device)
+        
+        probe_nodes = ProbeGraphBuilder.extract_probe_nodes(batched, n_query)
+        assert probe_nodes.shape == (11, 16)  # 5 + 6 probe nodes
+
+
+class TestGENBlock:
+    """Test GENBlock message passing."""
+    
+    def test_forward(self, device):
+        """Test GEN block forward pass."""
+        block = GENBlock(
+            latent_dim=16,
+            hidden_dim=32,
+            num_mlp_layers=2,
+            epsilon=1e-6,
+        ).to(device)
+        
+        graph = GraphsTuple(
+            nodes=torch.randn(10, 16, device=device),
+            edges=torch.randn(30, 16, device=device),
+            senders=torch.randint(0, 10, (30,), device=device),
+            receivers=torch.randint(0, 10, (30,), device=device),
+            n_node=torch.tensor([10], device=device),
+            n_edge=torch.tensor([30], device=device),
+        )
+        
+        out_graph = block(graph)
+        
+        # Check shapes
+        assert out_graph.nodes.shape == (10, 16)
+        assert out_graph.edges.shape == (30, 16)  # Edges NOT updated in GEN
+        
+        # Check that edges are unchanged (GENBlock.updates_edges = False)
+        assert torch.allclose(out_graph.edges, graph.edges)
 
 
 class TestMultiHeadAttention:
