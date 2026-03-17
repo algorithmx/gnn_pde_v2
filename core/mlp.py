@@ -253,7 +253,7 @@ class MLP(nn.Module):
                 'layer': nn.LayerNorm(dim),
                 'batch': nn.BatchNorm1d(dim),
                 'instance': nn.InstanceNorm1d(dim, affine=True),
-                'group': nn.GroupNorm(num_groups=min(8, dim), num_channels=dim),
+                'group': nn.GroupNorm(num_groups=next(g for g in range(min(8, dim), 0, -1) if dim % g == 0), num_channels=dim),
             }
             if spec not in mapping:
                 raise ValueError(
