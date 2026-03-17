@@ -94,7 +94,7 @@ def example_windfarm_gno():
     # Edge attributes: relative positions
     edge_attr = torch.randn(num_edges, 4)
     
-    turbine_graph = GraphsTuple(
+    turbine_graph = GraphsTuple.from_flat(
         nodes=turbine_features,
         edges=edge_attr,
         receivers=edge_index[1],
@@ -144,7 +144,7 @@ def example_probe_decoder_with_gen():
     
     # Create a source graph
     num_nodes = 20
-    source_graph = GraphsTuple(
+    source_graph = GraphsTuple.from_flat(
         nodes=torch.randn(num_nodes, 128),  # Already in latent space
         edges=torch.randn(100, 1),          # Distances
         receivers=torch.randint(0, num_nodes, (100,)),

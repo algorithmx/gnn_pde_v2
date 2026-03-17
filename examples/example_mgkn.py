@@ -261,11 +261,13 @@ def create_graphs_from_grid(
         coords
     ], dim=1)  # [n, 3]
     
-    return GraphsTuple(
+    return GraphsTuple.from_flat(
         nodes=nodes,
+        n_node=torch.tensor([nodes.shape[0]], device=nodes.device),
         edges=edges,
         senders=senders,
         receivers=receivers,
+        n_edge=torch.tensor([edges.shape[0]], device=edges.device),
         positions=coords,
     )
 

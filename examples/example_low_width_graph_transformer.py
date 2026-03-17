@@ -729,7 +729,7 @@ def create_synthetic_graph(
     receivers = edge_pairs[:, 1]
     
     # Create graph
-    graph = GraphsTuple(
+    graph = GraphsTuple.from_flat(
         nodes=nodes,
         edges=None,
         senders=senders,

@@ -16,7 +16,7 @@ Version: 2.1.0
 __version__ = "2.1.0"
 
 # Core exports (always available)
-from .core.graph import GraphsTuple, batch_graphs, unbatch_graphs
+from .core.graph import GraphsTuple, GraphTopology, batch_graphs, unbatch_graphs
 from .core.base import BaseModel
 from .core.functional import (
     scatter_sum,
@@ -33,6 +33,7 @@ from .core.functional import (
 __all__ = [
     # Core data structures
     "GraphsTuple",
+    "GraphTopology",
     "batch_graphs",
     "unbatch_graphs",
     "BaseModel",

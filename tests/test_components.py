@@ -303,7 +303,7 @@ class TestGraphNetBlock:
         """Test basic forward pass."""
         block = GraphNetBlock(latent_dim=16).to(device)
 
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(5, 16, device=device),
             edges=torch.randn(8, 16, device=device),
             receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),
@@ -322,7 +322,7 @@ class TestGraphNetBlock:
         block = GraphNetBlock(latent_dim=16).to(device)
         g = torch.randn(1, 4, device=device)
 
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(5, 16, device=device),
             edges=torch.randn(8, 16, device=device),
             receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),
@@ -339,7 +339,7 @@ class TestGraphNetBlock:
         """Test with a batch of two graphs."""
         block = GraphNetBlock(latent_dim=8).to(device)
 
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(7, 8, device=device),
             edges=torch.randn(10, 8, device=device),
             receivers=torch.randint(0, 7, (10,), device=device),
@@ -379,11 +379,13 @@ class TestEdgeConditionedConvBlock:
     """Test EdgeConditionedConvBlock (NNConv-style)."""
 
     def _make_graph(self, device, latent=16, edge_latent=16, n_nodes=5, n_edges=8):
-        return GraphsTuple(
+        return GraphsTuple.from_flat(
             nodes=torch.randn(n_nodes, latent, device=device),
+            n_node=torch.tensor([n_nodes], device=device),
             edges=torch.randn(n_edges, edge_latent, device=device),
-            receivers=torch.randint(0, n_nodes, (n_edges,), device=device),
             senders=torch.randint(0, n_nodes, (n_edges,), device=device),
+            receivers=torch.randint(0, n_nodes, (n_edges,), device=device),
+            n_edge=torch.tensor([n_edges], device=device),
         )
 
     def test_forward_full(self, device):
@@ -483,7 +485,7 @@ class TestGraphNetProcessorBlockFactory:
             block_factory=factory,
         ).to(device)
 
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(5, 16, device=device),
             edges=torch.randn(8, 16, device=device),
             receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),
@@ -509,7 +511,7 @@ class TestGraphNetProcessorBlockFactory:
             block_factory=factory,
         ).to(device)
 
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(4, 8, device=device),
             edges=torch.randn(6, 8, device=device),
             receivers=torch.randint(0, 4, (6,), device=device),
@@ -526,7 +528,7 @@ class TestEdgeConvBlock:
     """Test EdgeConvBlock (DGCNN-style) message passing."""
 
     def _make_graph(self, device, latent=16):
-        return GraphsTuple(
+        return GraphsTuple.from_flat(
             nodes=torch.randn(5, latent, device=device),
             edges=torch.randn(8, latent, device=device),  # edge dim = latent
             receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),
@@ -583,7 +585,7 @@ class TestGlobalGraphNetBlock:
         """Test basic forward pass with globals."""
         block = GlobalGraphNetBlock(latent_dim=16, global_latent_dim=4).to(device)
 
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(5, 16, device=device),
             edges=torch.randn(8, 16, device=device),
             receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),
@@ -604,7 +606,7 @@ class TestGlobalGraphNetBlock:
         block = GlobalGraphNetBlock(latent_dim=8, global_latent_dim=4).to(device)
         g = torch.randn(1, 4, device=device)
 
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(5, 8, device=device),
             edges=torch.randn(6, 8, device=device),
             receivers=torch.randint(0, 5, (6,), device=device),
@@ -621,7 +623,7 @@ class TestGlobalGraphNetBlock:
         """Test with a batch of two graphs."""
         block = GlobalGraphNetBlock(latent_dim=8, global_latent_dim=4).to(device)
 
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(7, 8, device=device),
             edges=torch.randn(10, 8, device=device),
             receivers=torch.randint(0, 7, (10,), device=device),
@@ -640,7 +642,7 @@ class TestGlobalGraphNetBlock:
         """AssertionError when graph.globals is None."""
         block = GlobalGraphNetBlock(latent_dim=8, global_latent_dim=4).to(device)
 
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(5, 8, device=device),
             edges=torch.randn(6, 8, device=device),
             receivers=torch.randint(0, 5, (6,), device=device),
@@ -663,7 +665,7 @@ class TestGraphNetProcessor:
             n_layers=3,
         ).to(device)
 
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(5, 16, device=device),
             edges=torch.randn(8, 16, device=device),
             receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),
@@ -689,7 +691,7 @@ class TestGlobalGraphNetProcessor:
             n_layers=3,
         ).to(device)
 
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(5, 16, device=device),
             edges=torch.randn(8, 16, device=device),
             receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),
@@ -714,7 +716,7 @@ class TestGlobalGraphNetProcessor:
             residual=True,
         ).to(device)
 
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(4, 8, device=device),
             edges=torch.randn(6, 8, device=device),
             receivers=torch.randint(0, 4, (6,), device=device),
@@ -738,7 +740,7 @@ class TestMLPDecoder:
             out_dim=3,
         ).to(device)
 
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(5, 16, device=device),
             n_node=torch.tensor([5], device=device),
         )
@@ -766,7 +768,7 @@ class TestIndependentMLPDecoder:
         ).to(device)
 
         nodes = torch.randn(5, 16, device=device)
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             n_node=torch.tensor([5], device=device),
         )
@@ -810,7 +812,7 @@ class TestProbeDecoder:
         ).to(device)
 
         # Source graph
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(10, 16, device=device),
             positions=torch.randn(10, 2, device=device),
             n_node=torch.tensor([10], device=device),
@@ -836,7 +838,7 @@ class TestProbeDecoder:
         decoder.output_mlp = torch.nn.Linear(16 + 4, 1).to(device)
 
         # Source graph
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(10, 16, device=device),
             edges=torch.randn(30, 16, device=device),
             senders=torch.randint(0, 10, (30,), device=device),
@@ -922,7 +924,7 @@ class TestProbeGraphBuilder:
     def test_extract_probe_nodes(self, device):
         """Test probe node extraction."""
         # Create batched probe graph
-        graph1 = GraphsTuple(
+        graph1 = GraphsTuple.from_flat(
             nodes=torch.randn(15, 16, device=device),  # 10 source + 5 probe
             edges=torch.randn(15, 1, device=device),
             senders=torch.randint(0, 10, (15,), device=device),
@@ -930,7 +932,7 @@ class TestProbeGraphBuilder:
             n_node=torch.tensor([15], device=device),
             n_edge=torch.tensor([15], device=device),
         )
-        graph2 = GraphsTuple(
+        graph2 = GraphsTuple.from_flat(
             nodes=torch.randn(18, 16, device=device),  # 12 source + 6 probe
             edges=torch.randn(18, 1, device=device),
             senders=torch.randint(0, 12, (18,), device=device),
@@ -959,7 +961,7 @@ class TestGENBlock:
             epsilon=1e-6,
         ).to(device)
         
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(10, 16, device=device),
             edges=torch.randn(30, 16, device=device),
             senders=torch.randint(0, 10, (30,), device=device),
@@ -1139,7 +1141,7 @@ class TestTransformerProcessor:
             n_heads=8,
         ).to(device)
         
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(10, 64, device=device),
             n_node=torch.tensor([10], device=device),
         )
@@ -1158,7 +1160,7 @@ class TestTransformerProcessor:
             position_dim=2,
         ).to(device)
         
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(10, 64, device=device),
             positions=torch.randn(10, 2, device=device),
             n_node=torch.tensor([10], device=device),
@@ -1176,7 +1178,7 @@ class TestTransformerProcessor:
             use_relative_positions=True,
         ).to(device)
         
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(10, 64, device=device),
             n_node=torch.tensor([10], device=device),
         )
@@ -1194,7 +1196,7 @@ class TestTransformerProcessor:
             position_dim=2,
         ).to(device)
         
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(15, 32, device=device),
             positions=torch.randn(15, 2, device=device),
             n_node=torch.tensor([7, 8], device=device),
@@ -1355,7 +1357,7 @@ class TestAggregationInMessagePassingBlock:
     """Test Aggregation integration with MessagePassingBlock."""
 
     def _make_graph(self, device):
-        return GraphsTuple(
+        return GraphsTuple.from_flat(
             nodes=torch.randn(5, 16, device=device),
             edges=torch.randn(8, 16, device=device),  # edge dim must match latent_dim
             receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),

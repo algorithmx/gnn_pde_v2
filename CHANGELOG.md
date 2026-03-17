@@ -6,9 +6,66 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
-## [2.8.2] - 2026-03-16 - Planned
+## [2.8.2] - 2026-03-17
 
-### TODO split `GraphTopology` from `GraphsTuple` 
+### Split `GraphTopology` from `GraphsTuple`
+
+Resolves code-review issue 1.4 ("GraphsTuple conflates two logically different
+things") in full.  The fix is structural: the type system now enforces the
+topology / feature separation rather than relying on developer discipline.
+
+#### New: `GraphTopology` dataclass (`core/graph.py`)
+
+- `GraphTopology(frozen=True)` holds all structural / geometric fields:
+  `n_node`, `senders`, `receivers`, `n_edge`, `positions`.
+- Carries its own `to(device)`, `validate(nodes)`, `num_graphs`, `device`.
+- `positions` moved here from `GraphsTuple` (geometry is structure, not a
+  learned feature).
+
+#### Changed: `GraphsTuple` (`core/graph.py`)
+
+- Now has **4 fields**: `nodes`, `topology: GraphTopology`, `edges=None`,
+  `globals=None`.
+- Backward-compat properties (`n_node`, `senders`, `receivers`, `n_edge`,
+  `positions`) delegate to `self.topology` — all existing read-access code
+  continues unchanged.
+- `GraphsTuple.from_flat(nodes, n_node, ...)` classmethod provides the old
+  flat-kwarg construction style for migration / test convenience.
+- `replace(**kwargs)` blocked from topology fields (`topology`, `n_node`,
+  `senders`, `receivers`, `n_edge`, `positions`) — raises `TypeError`.
+- `with_topology(source)` is the only sanctioned topology-swap path:
+  - `source: GraphsTuple` — copies `topology` **and** `edges` (U-Net upward-pass
+    pattern).
+  - `source: GraphTopology` — copies topology only.
+  - Explicit kwargs `(senders=, receivers=, n_edge=, edges=)` for synthetic
+    self-loops / edge injection.
+- `frozen=True, eq=False` on the dataclass — immutable, no broken tensor `__eq__`.
+
+#### Breaking changes
+
+- `GraphsTuple(nodes=..., n_node=..., senders=..., ...)` flat constructor no
+  longer works — use `GraphsTuple.from_flat(...)` or the canonical nested form.
+- `GraphsTuple.replace(senders=...)` raises `TypeError` — use `with_topology()`.
+
+#### Internal sites updated to canonical form
+
+- `components/probe.py`, `components/multiscale/graph_pooling.py`,
+  `utils/graph_utils.py` — use `GraphsTuple(nodes=..., topology=GraphTopology(...), ...)`.
+- `components/multiscale/graph_unet.py`, `components/multiscale/mgkn_processor.py`
+  — topology-swap `replace()` calls replaced with `with_topology()`.
+
+#### Migration sites updated to `from_flat()`
+
+- All `GraphsTuple(...)` calls in `tests/` and `examples/` migrated to
+  `GraphsTuple.from_flat(...)` via bulk rename (91 call sites).
+
+#### Exports
+
+- `GraphTopology` added to `gnn_pde_v2` and `gnn_pde_v2.core` public API.
+
+#### Tests
+
+- 330 passed, 2 skipped (no regressions).
 
 ## [2.8.1] - 2026-03-16
 

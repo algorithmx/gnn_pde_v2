@@ -237,7 +237,7 @@ try:
             n_node = torch.tensor([data.x.shape[0]], dtype=torch.long, device=data.x.device)
             n_edge = torch.tensor([data.edge_attr.shape[0]], dtype=torch.long, device=data.x.device) if hasattr(data, 'edge_attr') else torch.tensor([data.edge_index.shape[1]], dtype=torch.long, device=data.x.device)
             
-            graph = GraphsTuple(
+            graph = GraphsTuple.from_flat(
                 nodes=data.x,
                 edges=data.edge_attr if hasattr(data, 'edge_attr') else None,
                 receivers=data.edge_index[1],
@@ -292,7 +292,7 @@ def example_usage():
     num_nodes = 100
     num_edges = 400
     
-    graph = GraphsTuple(
+    graph = GraphsTuple.from_flat(
         nodes=torch.randn(num_nodes, 11),           # Node features
         edges=torch.randn(num_edges, 3),            # Edge features
         senders=torch.randint(0, num_nodes, (num_edges,)),

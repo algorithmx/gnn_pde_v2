@@ -120,7 +120,7 @@ def example_transformer_processor():
     )
     
     # Create a graph with node features and positions
-    graph = GraphsTuple(
+    graph = GraphsTuple.from_flat(
         nodes=torch.randn(20, 64),  # 20 nodes, 64 features
         positions=torch.randn(20, 2),  # 20 nodes with 2D positions
         n_node=torch.tensor([20]),

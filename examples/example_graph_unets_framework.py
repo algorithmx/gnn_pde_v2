@@ -409,7 +409,7 @@ def create_synthetic_graph(
     receivers = edge_pairs[:, 1]
 
     # Create graph
-    graph = GraphsTuple(
+    graph = GraphsTuple.from_flat(
         nodes=nodes,
         edges=None,
         senders=senders,
@@ -548,7 +548,7 @@ def verify_framework_components():
     senders = torch.tensor([0, 1, 2, 3, 4, 5, 6, 7, 8])
     receivers = torch.tensor([1, 2, 3, 4, 5, 6, 7, 8, 9])
 
-    graph = GraphsTuple(
+    graph = GraphsTuple.from_flat(
         nodes=torch.randn(num_nodes, 16),
         edges=None,
         senders=senders,

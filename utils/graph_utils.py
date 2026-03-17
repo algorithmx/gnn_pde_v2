@@ -189,13 +189,13 @@ def mesh_to_graph(
     # Compute edge features
     edge_attr = compute_edge_features(vertices, senders, receivers, features='both')
     
-    return GraphsTuple(
+    return GraphsTuple.from_flat(
         nodes=features,
-        edges=edge_attr,
-        receivers=receivers,
-        senders=senders,
-        globals=None,
         n_node=torch.tensor([vertices.shape[0]], device=vertices.device),
+        edges=edge_attr,
+        senders=senders,
+        receivers=receivers,
         n_edge=torch.tensor([senders.shape[0]], device=vertices.device),
+        globals=None,
         positions=vertices,
     )

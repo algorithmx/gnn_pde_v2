@@ -1,6 +1,6 @@
 """Core components for the GNN-PDE framework (minimal)."""
 
-from .graph import GraphsTuple, batch_graphs, unbatch_graphs
+from .graph import GraphsTuple, GraphTopology, batch_graphs, unbatch_graphs
 from .base import BaseModel
 from .functional import (
     scatter_sum,

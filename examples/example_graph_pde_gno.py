@@ -171,11 +171,13 @@ class GraphPDE_GNO(AutoRegisterModel, name='graph_pde_gno', namespace='example')
         
         # Wrap raw tensors in GraphsTuple for the framework blocks
         src, dst = edge_index
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=node_emb,
+            n_node=torch.tensor([node_emb.shape[0]], device=node_emb.device),
             edges=edge_emb,
             senders=src,
             receivers=dst,
+            n_edge=torch.tensor([edge_emb.shape[0]], device=edge_emb.device),
         )
         
         # Apply edge-conditioned convolution blocks

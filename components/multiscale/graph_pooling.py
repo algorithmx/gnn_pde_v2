@@ -9,7 +9,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from ...core.graph import GraphsTuple
+from ...core.graph import GraphsTuple, GraphTopology
 
 
 class GraphPool(nn.Module):
@@ -143,12 +143,14 @@ class GraphPool(nn.Module):
         
         pooled_graph = GraphsTuple(
             nodes=selected_nodes,
+            topology=GraphTopology(
+                n_node=torch.tensor([k_actual], device=nodes.device),
+                senders=pooled_senders,
+                receivers=pooled_receivers,
+                n_edge=torch.tensor([pooled_senders.shape[0] if pooled_senders is not None else 0], device=nodes.device),
+            ),
             edges=pooled_edges,
             globals=pooled_globals,
-            senders=pooled_senders,
-            receivers=pooled_receivers,
-            n_node=torch.tensor([k_actual], device=nodes.device),
-            n_edge=torch.tensor([pooled_senders.shape[0] if pooled_senders is not None else 0], device=nodes.device),
         )
         
         return pooled_graph, indices
@@ -215,12 +217,12 @@ class GraphUnpool(nn.Module):
         # Create unpooled graph (edges not restored)
         unpooled_graph = GraphsTuple(
             nodes=new_nodes,
+            topology=GraphTopology(
+                n_node=torch.tensor([original_num_nodes], device=device),
+                n_edge=torch.tensor([0], device=device),
+            ),
             edges=None,
             globals=pooled_graph.globals,
-            senders=None,
-            receivers=None,
-            n_node=torch.tensor([original_num_nodes], device=device),
-            n_edge=torch.tensor([0], device=device),
         )
         
         return unpooled_graph

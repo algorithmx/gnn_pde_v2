@@ -69,7 +69,7 @@ class MGKNProcessor(nn.Module):
         device = graph.nodes.device if graph.nodes is not None else torch.device('cpu')
         n = graph.nodes.shape[0] if graph.nodes is not None else 0
         self_idx = torch.arange(n, device=device)
-        return graph.replace(
+        return graph.with_topology(
             senders=self_idx,
             receivers=self_idx,
             edges=torch.zeros(n, self.latent_dim, device=device,
@@ -125,12 +125,7 @@ class MGKNProcessor(nn.Module):
                 original_size = ref.nodes.shape[0] if ref.nodes is not None else x.nodes.shape[0]
                 x = self.unpool(x, indices_list[i], original_size)
                 # Restore graph topology from pre-pool graph
-                x = x.replace(
-                    edges=ref.edges,
-                    senders=ref.senders,
-                    receivers=ref.receivers,
-                    n_edge=ref.n_edge,
-                )
+                x = x.with_topology(ref)
 
             # Skip connection: add pre-pool features at the same resolution
             ref = graphs[i + 1] if i + 1 < len(graphs) else graphs[-1]

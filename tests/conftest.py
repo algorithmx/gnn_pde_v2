@@ -27,7 +27,7 @@ def sample_graph(device):
     """Create a sample graph for testing."""
     from gnn_pde_v2 import GraphsTuple
     
-    return GraphsTuple(
+    return GraphsTuple.from_flat(
         nodes=torch.randn(5, 10, device=device),
         edges=torch.randn(8, 4, device=device),
         receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),
@@ -42,7 +42,7 @@ def batched_graphs(device):
     """Create batched graphs for testing."""
     from gnn_pde_v2 import GraphsTuple
     
-    g1 = GraphsTuple(
+    g1 = GraphsTuple.from_flat(
         nodes=torch.randn(3, 5, device=device),
         edges=torch.randn(4, 2, device=device),
         receivers=torch.tensor([1, 2, 0, 1], device=device),
@@ -51,7 +51,7 @@ def batched_graphs(device):
         n_edge=torch.tensor([4], device=device),
     )
     
-    g2 = GraphsTuple(
+    g2 = GraphsTuple.from_flat(
         nodes=torch.randn(2, 5, device=device),
         edges=torch.randn(2, 2, device=device),
         receivers=torch.tensor([1, 0], device=device),
@@ -75,7 +75,7 @@ def sample_graph_100(device):
     senders = torch.randint(0, num_nodes, (200,), device=device)
     receivers = torch.randint(0, num_nodes, (200,), device=device)
     
-    return GraphsTuple(
+    return GraphsTuple.from_flat(
         nodes=nodes,
         edges=torch.randn(200, 4, device=device),
         receivers=receivers,

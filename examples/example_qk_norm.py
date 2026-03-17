@@ -238,7 +238,7 @@ def example_with_graphs():
     )
     
     # Create a graph
-    graph = GraphsTuple(
+    graph = GraphsTuple.from_flat(
         nodes=torch.randn(20, 64),  # 20 nodes, 64 features
         n_node=torch.tensor([20]),
     )

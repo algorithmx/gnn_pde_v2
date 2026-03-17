@@ -18,7 +18,7 @@ class TestGraphsTuple:
     
     def test_creation(self, device):
         """Test basic GraphsTuple creation."""
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(5, 10, device=device),
             edges=torch.randn(8, 4, device=device),
             receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),
@@ -36,7 +36,7 @@ class TestGraphsTuple:
         if not torch.cuda.is_available():
             pytest.skip("CUDA not available")
         
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(3, 5),
             n_node=torch.tensor([3]),
         )
@@ -46,7 +46,7 @@ class TestGraphsTuple:
     
     def test_replace(self, device):
         """Test dataclasses.replace()."""
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(3, 5, device=device),
             n_node=torch.tensor([3], device=device),
         )
@@ -63,7 +63,7 @@ class TestBatching:
     
     def test_batch_single(self, device):
         """Test batching a single graph."""
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(3, 5, device=device),
             edges=torch.randn(4, 2, device=device),
             receivers=torch.tensor([1, 2, 0, 1], device=device),
@@ -80,7 +80,7 @@ class TestBatching:
     
     def test_batch_multiple(self, device):
         """Test batching multiple graphs."""
-        g1 = GraphsTuple(
+        g1 = GraphsTuple.from_flat(
             nodes=torch.randn(3, 5, device=device),
             edges=torch.randn(4, 2, device=device),
             receivers=torch.tensor([1, 2, 0, 1], device=device),
@@ -89,7 +89,7 @@ class TestBatching:
             n_edge=torch.tensor([4], device=device),
         )
         
-        g2 = GraphsTuple(
+        g2 = GraphsTuple.from_flat(
             nodes=torch.randn(2, 5, device=device),
             edges=torch.randn(2, 2, device=device),
             receivers=torch.tensor([1, 0], device=device),
@@ -110,7 +110,7 @@ class TestBatching:
     
     def test_unbatch(self, device):
         """Test unbatching."""
-        g1 = GraphsTuple(
+        g1 = GraphsTuple.from_flat(
             nodes=torch.randn(3, 5, device=device),
             edges=torch.randn(4, 2, device=device),
             receivers=torch.tensor([1, 2, 0, 1], device=device),
@@ -119,7 +119,7 @@ class TestBatching:
             n_edge=torch.tensor([4], device=device),
         )
         
-        g2 = GraphsTuple(
+        g2 = GraphsTuple.from_flat(
             nodes=torch.randn(2, 5, device=device),
             edges=torch.randn(2, 2, device=device),
             receivers=torch.tensor([1, 0], device=device),
@@ -137,7 +137,7 @@ class TestBatching:
     
     def test_batch_unbatch_roundtrip(self, device):
         """Test batch -> unbatch roundtrip."""
-        g1 = GraphsTuple(
+        g1 = GraphsTuple.from_flat(
             nodes=torch.randn(3, 5, device=device),
             edges=torch.randn(4, 2, device=device),
             receivers=torch.tensor([1, 2, 0, 1], device=device),

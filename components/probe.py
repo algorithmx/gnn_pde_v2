@@ -19,7 +19,7 @@ from typing import Optional, Dict, Any, List, Tuple
 import torch
 import torch.nn as nn
 
-from ..core.graph import GraphsTuple, batch_graphs, unbatch_graphs
+from ..core.graph import GraphsTuple, GraphTopology, batch_graphs, unbatch_graphs
 from ..core.functional import scatter_mean, scatter_sum
 from ..core.mlp import MLP
 
@@ -124,13 +124,15 @@ class ProbeGraphBuilder:
         
         return GraphsTuple(
             nodes=all_nodes,
+            topology=GraphTopology(
+                n_node=torch.tensor([n_source + n_queries], device=query_positions.device),
+                senders=senders,
+                receivers=receivers,
+                n_edge=torch.tensor([len(receivers)], device=query_positions.device),
+                positions=all_positions,
+            ),
             edges=edge_features,
-            receivers=receivers,
-            senders=senders,
             globals=None,
-            n_node=torch.tensor([n_source + n_queries], device=query_positions.device),
-            n_edge=torch.tensor([len(receivers)], device=query_positions.device),
-            positions=all_positions,
         )
     
     @staticmethod

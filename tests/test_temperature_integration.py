@@ -187,8 +187,9 @@ class TestTransformerProcessorTemperature:
     @pytest.fixture
     def sample_graph(self):
         """Create a sample graph."""
-        return GraphsTuple(
+        return GraphsTuple.from_flat(
             nodes=torch.randn(10, 64),
+            n_node=torch.tensor([10]),
             edges=None,
             receivers=None,
             senders=None,

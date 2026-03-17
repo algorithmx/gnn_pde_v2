@@ -53,7 +53,7 @@ class TestGraphPool:
         senders = torch.randint(0, num_nodes, (200,), device=device)
         receivers = torch.randint(0, num_nodes, (200,), device=device)
         
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=torch.randn(200, 4, device=device),
             receivers=receivers,
@@ -75,7 +75,7 @@ class TestGraphPool:
         k = 20
         
         nodes = torch.randn(num_nodes, feature_dim, device=device)
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=None,
             receivers=None,
@@ -107,7 +107,7 @@ class TestGraphPool:
         k = 10
         
         nodes = torch.randn(num_nodes, feature_dim, device=device)
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=None,
             receivers=None,
@@ -135,7 +135,7 @@ class TestGraphPool:
         k = 10
         
         nodes = torch.randn(num_nodes, feature_dim, device=device, requires_grad=True)
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=None,
             receivers=None,
@@ -165,7 +165,7 @@ class TestGraphPool:
         senders = torch.cat([senders, receivers])
         receivers = torch.cat([receivers, senders[:num_nodes-1]])
         
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=torch.randn(senders.shape[0], 4, device=device),
             receivers=receivers,
@@ -198,7 +198,7 @@ class TestGraphPool:
         senders = torch.arange(num_nodes - 1, device=device)
         receivers = torch.arange(1, num_nodes, device=device)
         
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=torch.randn(senders.shape[0], 4, device=device),
             receivers=receivers,
@@ -223,7 +223,7 @@ class TestGraphPool:
         k = 20  # Larger than num_nodes
         
         nodes = torch.randn(num_nodes, feature_dim, device=device)
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=None,
             receivers=None,
@@ -246,7 +246,7 @@ class TestGraphPool:
         k = 15
         
         nodes = torch.randn(num_nodes, feature_dim, device=device)
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=None,
             receivers=None,
@@ -279,7 +279,7 @@ class TestGraphUnpool:
         feature_dim = 16
         
         pooled_nodes = torch.randn(pooled_num_nodes, feature_dim, device=device)
-        pooled_graph = GraphsTuple(
+        pooled_graph = GraphsTuple.from_flat(
             nodes=pooled_nodes,
             edges=None,
             receivers=None,
@@ -304,7 +304,7 @@ class TestGraphUnpool:
         feature_dim = 8
         
         pooled_nodes = torch.ones(pooled_num_nodes, feature_dim, device=device)
-        pooled_graph = GraphsTuple(
+        pooled_graph = GraphsTuple.from_flat(
             nodes=pooled_nodes,
             edges=None,
             receivers=None,
@@ -335,7 +335,7 @@ class TestGraphUnpool:
         
         # Create distinctive features
         pooled_nodes = torch.randn(pooled_num_nodes, feature_dim, device=device)
-        pooled_graph = GraphsTuple(
+        pooled_graph = GraphsTuple.from_flat(
             nodes=pooled_nodes,
             edges=None,
             receivers=None,
@@ -362,7 +362,7 @@ class TestGraphUnpool:
         
         # Create original graph
         nodes = torch.randn(num_nodes, feature_dim, device=device)
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=None,
             receivers=None,
@@ -397,7 +397,7 @@ class TestGraphUNetProcessor:
         
         nodes = torch.randn(num_nodes, feature_dim, device=device)
         # GraphNetBlock expects edges with dimension = latent_dim
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=torch.randn(100, feature_dim, device=device),
             receivers=torch.randint(0, num_nodes, (100,), device=device),
@@ -430,7 +430,7 @@ class TestGraphUNetProcessor:
         receivers = torch.randint(0, num_nodes, (50,), device=device)
         
         # GraphNetBlock expects edges with dimension = latent_dim
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=torch.randn(50, feature_dim, device=device),
             receivers=receivers,
@@ -459,7 +459,7 @@ class TestGraphUNetProcessor:
         receivers = torch.randint(0, num_nodes, (50,), device=device)
         
         # GraphNetBlock expects edges with dimension = latent_dim
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=torch.randn(50, feature_dim, device=device),
             receivers=receivers,
@@ -491,7 +491,7 @@ class TestGraphUNetProcessor:
 
         senders = torch.randint(0, num_nodes, (100,), device=device)
         receivers = torch.randint(0, num_nodes, (100,), device=device)
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=torch.randn(num_nodes, feature_dim, device=device),
             edges=torch.randn(100, feature_dim, device=device),
             senders=senders,
@@ -527,7 +527,7 @@ class TestGraphUNetProcessor:
         senders = torch.randint(0, num_nodes, (50,), device=device)
         receivers = torch.randint(0, num_nodes, (50,), device=device)
         
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=torch.randn(50, feature_dim, device=device),
             receivers=receivers,
@@ -562,7 +562,7 @@ class TestGraphUNetProcessor:
         senders = torch.randint(0, num_nodes, (100,), device=device)
         receivers = torch.randint(0, num_nodes, (100,), device=device)
         
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=torch.randn(100, feature_dim, device=device),
             receivers=receivers,
@@ -595,7 +595,7 @@ class TestMGKNProcessor:
         
         nodes = torch.randn(num_nodes, feature_dim, device=device)
         # GraphNetBlock expects edges with dimension = latent_dim
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=torch.randn(150, feature_dim, device=device),
             receivers=torch.randint(0, num_nodes, (150,), device=device),
@@ -636,7 +636,7 @@ class TestMGKNProcessor:
         senders = torch.randint(0, num_nodes, (num_edges,), device=device)
         receivers = torch.randint(0, num_nodes, (num_edges,), device=device)
 
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=torch.randn(num_edges, feature_dim, device=device),
             receivers=receivers,
@@ -685,7 +685,7 @@ class TestMGKNProcessor:
         senders = torch.randint(0, num_nodes, (num_edges,), device=device)
         receivers = torch.randint(0, num_nodes, (num_edges,), device=device)
         
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=torch.randn(num_edges, feature_dim, device=device),
             receivers=receivers,
@@ -717,7 +717,7 @@ class TestMGKNProcessor:
         senders = torch.randint(0, num_nodes, (num_edges,), device=device)
         receivers = torch.randint(0, num_nodes, (num_edges,), device=device)
         
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=torch.randn(num_edges, feature_dim, device=device),
             receivers=receivers,
@@ -1159,7 +1159,7 @@ class TestHierarchicalGraph:
         
         nodes = torch.randn(num_nodes, feature_dim, device=device)
         # GraphNetBlock expects edges with dimension = latent_dim
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=torch.randn(150, feature_dim, device=device),
             receivers=torch.randint(0, num_nodes, (150,), device=device),
@@ -1189,7 +1189,7 @@ class TestHierarchicalGraph:
         senders = torch.randint(0, num_nodes, (num_edges,), device=device)
         receivers = torch.randint(0, num_nodes, (num_edges,), device=device)
         
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=torch.randn(num_edges, feature_dim, device=device),
             receivers=receivers,
@@ -1328,7 +1328,7 @@ class TestIntegration:
         receivers = torch.tensor(receivers, device=device)
         
         # GraphNetBlock expects edges with dimension = latent_dim
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=torch.randn(senders.shape[0], feature_dim, device=device),
             receivers=receivers,
@@ -1360,7 +1360,7 @@ class TestIntegration:
         nodes = torch.randn(20, 8, device=device)
         senders = torch.randint(0, 20, (30,), device=device)
         receivers = torch.randint(0, 20, (30,), device=device)
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=torch.randn(30, 8, device=device),
             receivers=receivers,
@@ -1382,7 +1382,7 @@ class TestIntegration:
         # Test GraphPool
         pool = GraphPool(k=10, feature_dim=8)
         nodes = torch.randn(20, 8)
-        graph = GraphsTuple(
+        graph = GraphsTuple.from_flat(
             nodes=nodes,
             edges=None,
             receivers=None,
@@ -1408,7 +1408,7 @@ def sample_graph_100(device):
     senders = torch.randint(0, num_nodes, (200,), device=device)
     receivers = torch.randint(0, num_nodes, (200,), device=device)
     
-    return GraphsTuple(
+    return GraphsTuple.from_flat(
         nodes=nodes,
         edges=torch.randn(200, 4, device=device),
         receivers=receivers,

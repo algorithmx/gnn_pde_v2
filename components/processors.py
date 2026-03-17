@@ -118,6 +118,13 @@ class MessagePassingBlock(ABC, nn.Module):
         ...
 
     def forward(self, graph: GraphsTuple) -> GraphsTuple:
+        if graph.senders is None:
+            # Edgeless graph (e.g. after aggressive pooling strips all edges).
+            # No messages to aggregate — return graph with only the node MLP
+            # applied to a zero-aggregation signal.
+            zero_agg = torch.zeros_like(graph.nodes)
+            new_nodes = self.update_nodes(graph.nodes, zero_agg, graph)
+            return graph.replace(nodes=new_nodes)
         messages, new_edges = self.compute_messages(graph)
         aggregated = self._aggregate(messages, graph.receivers, graph.nodes.shape[0])
         new_nodes = self.update_nodes(graph.nodes, aggregated, graph)
