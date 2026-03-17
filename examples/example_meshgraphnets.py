@@ -63,6 +63,12 @@ class MeshGraphNetsGNBlock(nn.Module):
     Node update:
       v' = MLP_v([v, sum_{in edges} e'])
     Residual update is applied outside this block for both nodes and edges.
+
+    Note: This block follows the same message-passing pattern as
+    :class:`~gnn_pde_v2.components.processors.MessagePassingBlock` /
+    :class:`~gnn_pde_v2.components.processors.GraphNetBlock`, but uses
+    a paper-specific 4-layer MLP with terminal LayerNorm to preserve
+    exact architectural equivalence with the original MeshGraphNets.
     """
 
     def __init__(self, hidden_size: int):

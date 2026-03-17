@@ -28,11 +28,11 @@ from typing import Optional, Tuple
 # Import framework components
 from gnn_pde_v2.core import AutoRegisterModel
 from gnn_pde_v2.core import MLP
-
-
-def modulate(x, shift, scale):
-    """AdaLN modulation function."""
-    return x * (1 + scale) + shift
+from gnn_pde_v2.components.attention import MultiHeadAttention
+from gnn_pde_v2.components.conditioning import (
+    DualAdaLNConditioning, DualAdaLNConditioningNoGate,
+    apply_modulation,
+)
 
 
 class Unisolver(AutoRegisterModel, name='unisolver', namespace='example'):
@@ -213,7 +213,7 @@ class Unisolver(AutoRegisterModel, name='unisolver', namespace='example'):
             'model_type': 'unisolver',
             'image_size': self.image_size,
             'patch_size': self.patch_size,
-            'dim': self.transformer.layers_x[0][0].to_qkv.in_features,
+            'dim': self.transformer.layers_x[0][0].dim,
             'depth': len(self.transformer.layers_x),
             'out_channels': self.out_channels,
         }
@@ -269,165 +269,92 @@ class VisEmbedder(nn.Module):
         return t_emb
 
 
-class FeedForward(nn.Module):
-    """Standard transformer feed-forward network using framework's MLP."""
-    
-    def __init__(self, dim, hidden_dim, dropout=0.0):
-        super().__init__()
-        # Original structure: Linear -> GELU -> Dropout -> Linear -> Dropout.
-        # The framework MLP matches this when use_layer_norm=False and hidden_dims=[hidden_dim].
-        self.net = nn.Sequential(
-            MLP(
-                in_dim=dim,
-                out_dim=dim,
-                hidden_dims=[hidden_dim],
-                activation='gelu',
-                dropout=dropout,
-                use_layer_norm=False,
-            ),
-            nn.Dropout(dropout),
-        )
-    
-    def forward(self, x):
-        return self.net(x)
-
-
-class Attention(nn.Module):
-    """Multi-head self-attention."""
-    
-    def __init__(self, dim, heads=8, dim_head=64, dropout=0.0):
-        super().__init__()
-        inner_dim = dim_head * heads
-        project_out = not (heads == 1 and dim_head == dim)
-        
-        self.heads = heads
-        self.scale = dim_head ** -0.5
-        
-        self.attend = nn.Softmax(dim=-1)
-        self.dropout = nn.Dropout(dropout)
-        
-        self.to_qkv = nn.Linear(dim, inner_dim * 3, bias=False)
-        
-        self.to_out = nn.Sequential(
-            nn.Linear(inner_dim, dim),
-            nn.Dropout(dropout),
-        ) if project_out else nn.Identity()
-    
-    def forward(self, x):
-        b, n, _, h = *x.shape, self.heads
-        qkv = self.to_qkv(x).chunk(3, dim=-1)
-        q, k, v = map(lambda t: t.reshape(b, n, h, -1).transpose(1, 2), qkv)
-        
-        dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
-        attn = self.attend(dots)
-        attn = self.dropout(attn)
-        
-        out = torch.matmul(attn, v)
-        out = out.transpose(1, 2).reshape(b, n, -1)
-        return self.to_out(out)
-
-
 class Transformer(nn.Module):
     """
     Transformer with decoupled AdaLN conditioning.
-    
-    Each layer has TWO modulation networks for domain-wise and point-wise conditioning.
+
+    Each layer uses two ``DualAdaLNConditioning`` modules (one for the
+    attention block, one for the MLP block) so that domain-wise (μ) and
+    point-wise (f) conditions are handled by the framework's built-in
+    implementation.  Zero-initialisation of the projection weights is
+    performed automatically inside ``DualAdaLNConditioning``.
     """
-    
+
     def __init__(self, dim, depth, heads, dim_head, mlp_dim, dropout=0.0):
+        """``dim_head`` must equal ``dim // heads`` (required by MultiHeadAttention)."""
         super().__init__()
-        
+        assert dim % heads == 0 and dim // heads == dim_head, (
+            f"MultiHeadAttention requires dim_head == dim // heads, "
+            f"got dim={dim}, heads={heads}, dim_head={dim_head}"
+        )
+
         self.layers_x = nn.ModuleList([])
-        
+        mu_dim = dim // 4
+        f_dim = dim // 4
+
         for _ in range(depth):
             self.layers_x.append(nn.ModuleList([
-                Attention(dim, heads=heads, dim_head=dim_head, dropout=dropout),
-                FeedForward(dim, mlp_dim, dropout=dropout),
-                # AdaLN modulation for domain-wise (μ) conditioning
-                nn.Sequential(nn.SiLU(), nn.Linear(dim // 4, 6 * dim // 4, bias=True)),
-                # AdaLN modulation for point-wise (f) conditioning
-                nn.Sequential(nn.SiLU(), nn.Linear(dim // 4, 6 * dim * 3 // 4, bias=True)),
+                MultiHeadAttention(dim=dim, n_heads=heads, dropout=dropout),
+                MLP(in_dim=dim, out_dim=dim, hidden_dims=[mlp_dim], activation='gelu',
+                    dropout=dropout, final_dropout=dropout, use_layer_norm=False),
+                # DualAdaLN for attention block (zero-inited internally)
+                DualAdaLNConditioning(mu_dim=mu_dim, f_dim=f_dim, out_dim=dim, split_ratio=0.25),
+                # DualAdaLN for MLP block (zero-inited internally)
+                DualAdaLNConditioning(mu_dim=mu_dim, f_dim=f_dim, out_dim=dim, split_ratio=0.25),
                 nn.LayerNorm(dim),
                 nn.LayerNorm(dim),
             ]))
-        
-        # Initialize modulation layers to identity
-        for i in range(depth):
-            nn.init.zeros_(self.layers_x[i][2][1].weight)
-            nn.init.zeros_(self.layers_x[i][2][1].bias)
-            nn.init.zeros_(self.layers_x[i][3][1].weight)
-            nn.init.zeros_(self.layers_x[i][3][1].bias)
-    
+
     def forward(self, x, mu, f):
         """
         Args:
-            x: [B, N, dim] - Input tokens
-            mu: [B, N, dim//4] - Domain-wise conditioning
-            f: [B, N, dim//4] - Point-wise conditioning
+            x:  [B, N, dim]      - Input tokens
+            mu: [B, N, dim//4]  - Domain-wise conditioning
+            f:  [B, N, dim//4]  - Point-wise conditioning
         """
-        for attn, ff, adaLN_mu, adaLN_f, norm1, norm2 in self.layers_x:
-            # Compute AdaLN parameters from both conditions
-            shift_msa_mu, scale_msa_mu, gate_msa_mu, shift_mlp_mu, scale_mlp_mu, gate_mlp_mu = \
-                adaLN_mu(mu).chunk(6, dim=-1)
-            shift_msa_f, scale_msa_f, gate_msa_f, shift_mlp_f, scale_mlp_f, gate_mlp_f = \
-                adaLN_f(f).chunk(6, dim=-1)
-            
-            # Concatenate μ and f conditioning
-            shift_msa = torch.cat([shift_msa_mu, shift_msa_f], dim=-1)
-            scale_msa = torch.cat([scale_msa_mu, scale_msa_f], dim=-1)
-            gate_msa = torch.cat([gate_msa_mu, gate_msa_f], dim=-1)
-            shift_mlp = torch.cat([shift_mlp_mu, shift_mlp_f], dim=-1)
-            scale_mlp = torch.cat([scale_mlp_mu, scale_mlp_f], dim=-1)
-            gate_mlp = torch.cat([gate_mlp_mu, gate_mlp_f], dim=-1)
-            
+        # DualAdaLNConditioning expects the two sources concatenated along the
+        # last dimension: [..., mu_dim + f_dim]
+        cond = torch.cat([mu, f], dim=-1)
+
+        for attn, ff, cond_attn, cond_mlp, norm1, norm2 in self.layers_x:
+            mod_attn = cond_attn(cond)
+            mod_mlp = cond_mlp(cond)
+
             # Attention block with modulation
-            x_attn = attn(modulate(norm1(x), shift_msa, scale_msa))
-            x = x + gate_msa * x_attn
-            
+            x_attn = attn(apply_modulation(norm1(x), mod_attn))
+            x = x + mod_attn.gate * x_attn
+
             # MLP block with modulation
-            x_mlp = ff(modulate(norm2(x), shift_mlp, scale_mlp))
-            x = x + gate_mlp * x_mlp
-        
+            x_mlp = ff(apply_modulation(norm2(x), mod_mlp))
+            x = x + mod_mlp.gate * x_mlp
+
         return x
 
 
 class FinalLayer(nn.Module):
-    """Final output layer with AdaLN modulation."""
-    
+    """Final output layer with AdaLN shift+scale modulation (no gate)."""
+
     def __init__(self, hidden_size, patch_size, out_channels):
         super().__init__()
         self.norm_final = nn.LayerNorm(hidden_size, elementwise_affine=False, eps=1e-6)
         self.linear = nn.Linear(hidden_size, patch_size * patch_size * out_channels, bias=True)
-        
-        # Modulation networks for domain and point conditions
-        self.adaLN_modulation_mu = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(hidden_size // 4, 2 * hidden_size // 4, bias=True)
-        )
-        self.adaLN_modulation_f = nn.Sequential(
-            nn.SiLU(),
-            nn.Linear(hidden_size // 4, 2 * hidden_size * 3 // 4, bias=True)
-        )
-        
-        # Initialize to zero
-        nn.init.constant_(self.adaLN_modulation_mu[-1].weight, 0)
-        nn.init.constant_(self.adaLN_modulation_mu[-1].bias, 0)
-        nn.init.constant_(self.adaLN_modulation_f[-1].weight, 0)
-        nn.init.constant_(self.adaLN_modulation_f[-1].bias, 0)
         nn.init.constant_(self.linear.weight, 0)
         nn.init.constant_(self.linear.bias, 0)
-    
+
+        # Dual-source shift+scale conditioning (no gate — no residual here).
+        # Zero-init of projection weights is handled internally.
+        self.cond = DualAdaLNConditioningNoGate(
+            mu_dim=hidden_size // 4,
+            f_dim=hidden_size // 4,
+            out_dim=hidden_size,
+            split_ratio=0.25,
+        )
+
     def forward(self, x, mu, f):
-        """Forward with AdaLN modulation."""
-        shift_mu, scale_mu = self.adaLN_modulation_mu(mu).chunk(2, dim=-1)
-        shift_f, scale_f = self.adaLN_modulation_f(f).chunk(2, dim=-1)
-        
-        shift = torch.cat([shift_mu, shift_f], dim=-1)
-        scale = torch.cat([scale_mu, scale_f], dim=-1)
-        
-        x = modulate(self.norm_final(x), shift, scale)
-        x = self.linear(x)
-        return x
+        """Forward with AdaLN shift+scale modulation."""
+        mod = self.cond(torch.cat([mu, f], dim=-1))
+        x = apply_modulation(self.norm_final(x), mod)
+        return self.linear(x)
 
 
 # ============================================================================

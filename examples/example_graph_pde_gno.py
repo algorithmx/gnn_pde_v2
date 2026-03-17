@@ -29,6 +29,7 @@ from typing import Optional, Tuple
 from gnn_pde_v2.core.graph import GraphsTuple
 from gnn_pde_v2.core import AutoRegisterModel
 from gnn_pde_v2.core import MLP
+from gnn_pde_v2.components import EdgeConditionedConvBlock
 
 
 class GraphPDE_GNO(AutoRegisterModel, name='graph_pde_gno', namespace='example'):
@@ -99,16 +100,17 @@ class GraphPDE_GNO(AutoRegisterModel, name='graph_pde_gno', namespace='example')
         # ==================== Processor ====================
         
         # Stack of edge-conditioned convolution blocks (NNConv-style)
+        # Uses the framework's EdgeConditionedConvBlock (MessagePassingBlock subclass)
         self.processor = nn.ModuleList([
-            GraphConvBlock(
-                hidden_size=hidden_size,
-                edge_hidden_size=hidden_size,
+            EdgeConditionedConvBlock(
+                latent_dim=hidden_size,
+                edge_latent_dim=hidden_size,
+                hidden_dim=hidden_size,
                 edge_weight_type=edge_weight_type,
-                aggr='mean',
+                aggregate='mean',
                 root_weight=True,
                 bias=True,
-                residual=False,
-                use_layer_norm=False,
+                activation='relu',
             )
             for _ in range(num_layers)
         ])
@@ -167,13 +169,22 @@ class GraphPDE_GNO(AutoRegisterModel, name='graph_pde_gno', namespace='example')
         
         # ==================== Processing ====================
         
-        # Apply graph convolution blocks
+        # Wrap raw tensors in GraphsTuple for the framework blocks
+        src, dst = edge_index
+        graph = GraphsTuple(
+            nodes=node_emb,
+            edges=edge_emb,
+            senders=src,
+            receivers=dst,
+        )
+        
+        # Apply edge-conditioned convolution blocks
         for block in self.processor:
-            node_emb = block(node_emb, edge_index, edge_emb)
+            graph = graph.replace(nodes=block(graph).nodes)
         
         # ==================== Decoding ====================
         
-        output = self.decoder(node_emb)
+        output = self.decoder(graph.nodes)
         
         return output
     
@@ -193,129 +204,9 @@ class GraphPDE_GNO(AutoRegisterModel, name='graph_pde_gno', namespace='example')
 GraphPDEGNO = GraphPDE_GNO
 
 
-class GraphConvBlock(nn.Module):
-    """Edge-conditioned convolution block (NNConv-style).
-
-    Supports kernel generation modes:
-    - 'full': generate a full [hidden, hidden] weight matrix per edge
-    - 'vector': generate a diagonal vector per edge (per-channel gating)
-    - 'scalar': generate a scalar per edge (uniform gating)
-
-    This is intended to match the key behavior in graph-pde's NNConv:
-    message = x_src @ W(edge_attr), with optional root transform and bias.
-    """
-
-    def __init__(
-        self,
-        hidden_size: int,
-        edge_hidden_size: int,
-        edge_weight_type: str = 'full',
-        aggr: str = 'mean',
-        root_weight: bool = True,
-        bias: bool = True,
-        residual: bool = False,
-        use_layer_norm: bool = False,
-    ):
-        super().__init__()
-
-        if aggr not in {'add', 'mean'}:
-            raise ValueError(f"Unknown aggr: {aggr}")
-
-        self.hidden_size = hidden_size
-        self.edge_weight_type = edge_weight_type
-        self.aggr = aggr
-        self.residual = residual
-        self.use_layer_norm = use_layer_norm
-
-        # Edge kernel generation network.
-        # Shape contract:
-        # - full   -> [E, H*H]
-        # - vector -> [E, H]
-        # - scalar -> [E, 1]
-        if edge_weight_type == 'full':
-            out_dim = hidden_size * hidden_size
-        elif edge_weight_type == 'vector':
-            out_dim = hidden_size
-        elif edge_weight_type == 'scalar':
-            out_dim = 1
-        else:
-            raise ValueError(f"Unknown edge_weight_type: {edge_weight_type}")
-
-        # Use framework's MLP for edge weight network
-        self.edge_weight_net = MLP(
-            in_dim=edge_hidden_size,
-            out_dim=out_dim,
-            hidden_dims=[hidden_size],
-            activation='relu',
-            use_layer_norm=False,
-        )
-
-        # Optional root transform and bias (as in NNConv)
-        if root_weight:
-            self.root = nn.Parameter(torch.empty(hidden_size, hidden_size))
-        else:
-            self.register_parameter('root', None)
-
-        if bias:
-            self.bias = nn.Parameter(torch.empty(hidden_size))
-        else:
-            self.register_parameter('bias', None)
-
-        self.norm = nn.LayerNorm(hidden_size) if use_layer_norm else None
-        self.reset_parameters()
-
-    def reset_parameters(self):
-        for m in self.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
-        if self.root is not None:
-            nn.init.xavier_uniform_(self.root)
-        if self.bias is not None:
-            nn.init.zeros_(self.bias)
-
-    def forward(
-        self,
-        node_emb: torch.Tensor,
-        edge_index: torch.Tensor,
-        edge_emb: torch.Tensor,
-    ) -> torch.Tensor:
-        src, dst = edge_index
-        H = self.hidden_size
-
-        src_x = node_emb[src]  # [E, H]
-
-        w = self.edge_weight_net(edge_emb)
-        if self.edge_weight_type == 'full':
-            W = w.view(-1, H, H)
-            msg = torch.bmm(src_x.unsqueeze(1), W).squeeze(1)  # [E, H]
-        elif self.edge_weight_type == 'vector':
-            msg = src_x * w  # [E, H]
-        else:  # scalar
-            msg = src_x * w  # [E, H]
-
-        num_nodes = node_emb.shape[0]
-        aggregated = torch.zeros(num_nodes, H, device=node_emb.device, dtype=node_emb.dtype)
-        aggregated.scatter_add_(0, dst.unsqueeze(-1).expand(-1, H), msg)
-
-        if self.aggr == 'mean':
-            degree = torch.zeros(num_nodes, device=node_emb.device, dtype=node_emb.dtype)
-            degree.scatter_add_(0, dst, torch.ones(len(dst), device=node_emb.device, dtype=node_emb.dtype))
-            aggregated = aggregated / degree.clamp(min=1).unsqueeze(-1)
-
-        out = aggregated
-        if self.root is not None:
-            out = out + node_emb @ self.root
-        if self.bias is not None:
-            out = out + self.bias
-
-        if self.residual:
-            out = out + node_emb
-        if self.norm is not None:
-            out = self.norm(out)
-
-        return out
+# GraphConvBlock has been absorbed into the framework as EdgeConditionedConvBlock.
+# See gnn_pde_v2.components.processors.EdgeConditionedConvBlock.
+GraphConvBlock = EdgeConditionedConvBlock
 
 
 # ============================================================================

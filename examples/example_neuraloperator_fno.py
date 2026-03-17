@@ -26,7 +26,7 @@ from typing import Tuple, List, Union
 
 # Import framework components
 from gnn_pde_v2.core import AutoRegisterModel
-from gnn_pde_v2.components import FNOProcessor, SpectralConv
+from gnn_pde_v2.components import FNOProcessor, FNOBlock, FNOMLPBlock
 from gnn_pde_v2.core import MLP
 
 
@@ -113,19 +113,30 @@ class NeuralOperatorFNO(AutoRegisterModel, name='neuraloperator_fno', namespace=
             use_layer_norm=False,
         )
         
-        # FNO Blocks: Core processing layers using framework's SpectralConv
-        # Each block consists of: SpectralConv + ChannelMLP + Residual
-        self.fno_blocks = nn.ModuleList([
-            FNOBlockFramework(
-                hidden_channels=hidden_channels,
-                n_modes=n_modes,
-                n_dim=self.n_dim,
-                use_channel_mlp=use_channel_mlp,
-                channel_mlp_expansion=channel_mlp_expansion,
-                channel_mlp_dropout=channel_mlp_dropout,
-            )
-            for _ in range(n_layers)
-        ])
+        # FNO Blocks: choose between FNOMLPBlock (neuraloperator-style, with
+        # channel MLP) and plain FNOBlock (classic activation-only).
+        if use_channel_mlp:
+            self.fno_blocks = nn.ModuleList([
+                FNOMLPBlock(
+                    width=hidden_channels,
+                    modes=list(n_modes),
+                    n_dim=self.n_dim,
+                    channel_mlp_ratio=channel_mlp_expansion,
+                    channel_mlp_dropout=channel_mlp_dropout,
+                    residual=True,
+                )
+                for _ in range(n_layers)
+            ])
+        else:
+            self.fno_blocks = nn.ModuleList([
+                FNOBlock(
+                    width=hidden_channels,
+                    modes=list(n_modes),
+                    n_dim=self.n_dim,
+                    residual=True,
+                )
+                for _ in range(n_layers)
+            ])
         
         # Projection layer: ChannelMLP-style 2-layer pointwise projection
         self.projection = MLP(
@@ -209,70 +220,6 @@ class NeuralOperatorFNO(AutoRegisterModel, name='neuraloperator_fno', namespace=
 
 # Backward-compatible alias expected by tests/examples.
 FNO = NeuralOperatorFNO
-
-
-class FNOBlockFramework(nn.Module):
-    """
-    FNO Block using framework's SpectralConv.
-    
-    Matches the essential neuraloperator FNO block behavior:
-    - spectral branch + linear 1x1 skip branch
-    - optional channel MLP after branch summation
-    - residual connection handled inside the block
-    """
-    
-    def __init__(
-        self,
-        hidden_channels: int,
-        n_modes: Tuple[int, ...],
-        n_dim: int,
-        use_channel_mlp: bool = True,
-        channel_mlp_expansion: float = 0.5,
-        channel_mlp_dropout: float = 0.0,
-    ):
-        super().__init__()
-        
-        self.n_dim = n_dim
-        conv = nn.Conv1d if n_dim == 1 else nn.Conv2d if n_dim == 2 else nn.Conv3d
-        
-        # Spectral convolution using framework component
-        self.spectral_conv = SpectralConv(
-            in_channels=hidden_channels,
-            out_channels=hidden_channels,
-            modes=list(n_modes),
-            separable=False,
-        )
-        self.linear_skip = conv(hidden_channels, hidden_channels, 1)
-        
-        # Channel MLP: Local operator via 1×1 convolutions
-        if use_channel_mlp:
-            mlp_hidden = int(hidden_channels * channel_mlp_expansion)
-            conv_factory = NeuralOperatorFNO._make_pointwise_factory(n_dim)
-            self.channel_mlp = MLP(
-                in_dim=hidden_channels,
-                out_dim=hidden_channels,
-                hidden_dims=[mlp_hidden],
-                activation='gelu',
-                dropout=channel_mlp_dropout,
-                norm=None,
-                linear_factory=conv_factory,
-                use_layer_norm=False,
-            )
-        else:
-            self.channel_mlp = None
-    
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: [B, C, *spatial]
-        Returns:
-            [B, C, *spatial]
-        """
-        residual = x
-        x1 = self.spectral_conv(x) + self.linear_skip(x)
-        if self.channel_mlp is not None:
-            x1 = self.channel_mlp(x1)
-        return residual + x1
 
 
 # ============================================================================
