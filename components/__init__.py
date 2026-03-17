@@ -53,11 +53,13 @@ from .processors import (
     GraphNetBlock, GraphNetProcessor,
     EdgeConditionedConvBlock,
     EdgeConvBlock,
+    GENBlock,
     GlobalGraphNetBlock, GlobalGraphNetProcessor,
 )
 from .gcn import GCNBlock, GCNBlockWithEdgeFeatures
 from .decoders import MLPDecoder, IndependentMLPDecoder
-from .probe import ProbeDecoder, ProbeMessagePassingLayer
+from .probe import ProbeDecoder, WindFarmGNO, ProbeGraphBuilder
+from .rbf import LearnableRBFEncoder, GaussianRBFEncoder
 from .transformer import (
     TransformerBlock, TransformerProcessor,
 )
@@ -113,6 +115,7 @@ __all__ = [
     "GraphNetBlock",
     "EdgeConditionedConvBlock",
     "EdgeConvBlock",
+    "GENBlock",
     "GlobalGraphNetBlock",
     "GraphNetProcessor",
     "GlobalGraphNetProcessor",
@@ -146,7 +149,11 @@ __all__ = [
     "MLPDecoder",
     "IndependentMLPDecoder",
     "ProbeDecoder",
-    "ProbeMessagePassingLayer",
+    "WindFarmGNO",
+    "ProbeGraphBuilder",
+    # RBF Encoders
+    "LearnableRBFEncoder",
+    "GaussianRBFEncoder",
     # Conditioning (Modulation & ConditioningProtocol live in gnn_pde_v2.core.protocols)
     "ZeroConditioning",
     "AdaLNConditioning",

@@ -537,6 +537,158 @@ class EdgeConvBlock(MessagePassingBlock):
 
 
 # ---------------------------------------------------------------------------
+# GEN Block (GEneralized aggregation Network)
+# ---------------------------------------------------------------------------
+
+class GENBlock(MessagePassingBlock):
+    """
+    GEneralized aggregation Network block from Li et al. (2020).
+    
+    From "DeeperGCN: All You Need to Train Deeper GCNs" (http://arxiv.org/abs/2006.07739).
+    Used in Wind-Farm-GNO for wake interaction modeling.
+    
+    Performs message passing with softmax aggregation and epsilon stability:
+    
+    1. **Message computation**: ``m_ij = ReLU(e_ij + h_j) + epsilon``
+       - Adds edge features to sender node features
+       - Applies ReLU and small epsilon for numerical stability
+       
+    2. **Softmax aggregation**: ``agg_i = sum_j softmax_j(m_ij) * m_ij``
+       - Computes attention weights via softmax over messages
+       - Aggregates weighted messages to receiver nodes
+       
+    3. **Node update**: ``h'_i = MLP(h_i + agg_i)``
+       - Residual-style update: adds aggregated messages to original features
+       - Transforms via MLP to produce new node features
+    
+    Unlike GraphNetBlock:
+    - Does NOT update edge features (edges are static)
+    - Uses softmax aggregation instead of sum/mean/max
+    - Has epsilon stability term in message computation
+    
+    Args:
+        latent_dim: Dimension for node and edge features
+        hidden_dim: Hidden dimension for node update MLP
+        num_mlp_layers: Number of layers in node update MLP
+        activation: Activation function for MLP
+        epsilon: Small constant for numerical stability (default: 1e-6)
+        message_norm: Whether to apply message normalization from DeeperGCN
+        
+    Example::
+    
+        from gnn_pde_v2.components import GENBlock
+        
+        block = GENBlock(latent_dim=128, hidden_dim=128, num_mlp_layers=2)
+        out_graph = block(graph)  # graph.edges are NOT updated
+    """
+    
+    updates_edges = False  # GEN blocks do not update edge features
+    
+    def __init__(
+        self,
+        latent_dim: int,
+        hidden_dim: int = 128,
+        num_mlp_layers: int = 2,
+        activation: str = 'relu',
+        epsilon: float = 1e-6,
+        message_norm: bool = False,
+    ):
+        super().__init__(
+            latent_dim=latent_dim,
+            aggregate='sum',  # Softmax is applied before aggregation
+        )
+        self.epsilon = epsilon
+        self.message_norm = message_norm
+        
+        # Node update MLP: transforms concatenated [node + aggregated_messages]
+        self.node_mlp = MLP(
+            in_dim=latent_dim,
+            out_dim=latent_dim,
+            hidden_dims=[hidden_dim] * num_mlp_layers,
+            activation=activation,
+            use_layer_norm=False,
+        )
+        
+        if message_norm:
+            # Learnable scale parameter for message normalization
+            self.message_scale = nn.Parameter(torch.ones(1))
+    
+    def compute_messages(
+        self,
+        graph: GraphsTuple,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """
+        Compute GEN messages: m_ij = ReLU(e_ij + h_j) + epsilon
+        
+        Returns:
+            messages: [E, latent_dim] computed messages
+            new_edges: None (edges are not updated in GEN)
+        """
+        nodes = graph.nodes
+        edges = graph.edges
+        senders = graph.senders
+        
+        # Gather sender node features
+        sender_features = nodes[senders]
+        
+        # Compute messages: m_ij = ReLU(e_ij + h_j) + epsilon
+        messages = torch.relu(edges + sender_features) + self.epsilon
+        
+        return messages, None  # Edges are NOT updated
+    
+    def update_nodes(
+        self,
+        nodes: torch.Tensor,
+        aggregated: torch.Tensor,
+        graph: GraphsTuple,
+    ) -> torch.Tensor:
+        """
+        Update nodes: h'_i = MLP(h_i + agg_i)
+        
+        Args:
+            nodes: [N, latent_dim] original node features
+            aggregated: [N, latent_dim] aggregated messages
+            graph: Input graph
+            
+        Returns:
+            [N, latent_dim] updated node features
+        """
+        # Optional message normalization
+        if self.message_norm:
+            agg_norm = torch.norm(aggregated, dim=-1, keepdims=True)
+            node_norm = torch.norm(nodes, dim=-1, keepdims=True)
+            aggregated = self.message_scale * node_norm * aggregated / (agg_norm + self.epsilon)
+        
+        # Residual-style update: h_i + agg_i
+        node_input = nodes + aggregated
+        return self.node_mlp(node_input)
+    
+    def forward(self, graph: GraphsTuple) -> GraphsTuple:
+        """
+        Apply GEN block with softmax aggregation.
+        
+        This overrides the base forward to insert softmax before aggregation.
+        """
+        # Compute messages (edges not updated)
+        messages, _ = self.compute_messages(graph)
+        
+        # Softmax aggregation: compute attention weights
+        from ..core.functional import scatter_softmax
+        attention_weights = scatter_softmax(
+            messages, graph.receivers, dim=0, dim_size=graph.nodes.shape[0]
+        )
+        weighted_messages = attention_weights * messages
+        
+        # Aggregate weighted messages
+        aggregated = self._aggregate(weighted_messages, graph.receivers, graph.nodes.shape[0])
+        
+        # Update nodes
+        new_nodes = self.update_nodes(graph.nodes, aggregated, graph)
+        
+        return graph.replace(nodes=new_nodes)
+
+
+# ---------------------------------------------------------------------------
 # Full Graph Nets block with globals
 # ---------------------------------------------------------------------------
 

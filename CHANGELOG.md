@@ -14,6 +14,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Jump to next version..
 
+## [2.7.10] - 2026-03-17
+
+### Breaking Changes
+
+- **Inspired by the work Wind-Farm-GNO**
+  - `components/probe.py`
+  - `components/processors.py`
+  - `components/rbf.py`
+  - `components/__init__.py`
 
 ## [2.7.9] - 2026-03-17
 
