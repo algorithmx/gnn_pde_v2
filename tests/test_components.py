@@ -11,9 +11,13 @@ from dataclasses import replace
 
 from gnn_pde_v2 import GraphsTuple
 from gnn_pde_v2.core import MLP
+from functools import partial
 from gnn_pde_v2.components import (
     Residual,
+    MessagePassingBlock,
     GraphNetBlock, GraphNetProcessor,
+    EdgeConditionedConvBlock,
+    EdgeConvBlock,  # NEW
     GlobalGraphNetBlock, GlobalGraphNetProcessor,
     MLPDecoder, IndependentMLPDecoder,
     ProbeDecoder,
@@ -315,6 +319,229 @@ class TestGraphNetBlock:
         out = block(graph)
         assert out.nodes.shape == (7, 8)
         assert out.edges.shape == (10, 8)
+
+
+class TestMessagePassingBlock:
+    """Test MessagePassingBlock ABC contract."""
+
+    def test_graphnetblock_is_subclass(self):
+        """GraphNetBlock must be a MessagePassingBlock subclass."""
+        assert issubclass(GraphNetBlock, MessagePassingBlock)
+
+    def test_edgeconditioned_is_subclass(self):
+        """EdgeConditionedConvBlock must be a MessagePassingBlock subclass."""
+        assert issubclass(EdgeConditionedConvBlock, MessagePassingBlock)
+
+    def test_updates_edges_attr(self):
+        """Check updates_edges class attribute."""
+        assert GraphNetBlock.updates_edges is True
+        assert EdgeConditionedConvBlock.updates_edges is False
+
+    def test_cannot_instantiate_abc(self):
+        """MessagePassingBlock is abstract and cannot be instantiated directly."""
+        with pytest.raises(TypeError):
+            MessagePassingBlock(latent_dim=8)
+
+
+class TestEdgeConditionedConvBlock:
+    """Test EdgeConditionedConvBlock (NNConv-style)."""
+
+    def _make_graph(self, device, latent=16, edge_latent=16, n_nodes=5, n_edges=8):
+        return GraphsTuple(
+            nodes=torch.randn(n_nodes, latent, device=device),
+            edges=torch.randn(n_edges, edge_latent, device=device),
+            receivers=torch.randint(0, n_nodes, (n_edges,), device=device),
+            senders=torch.randint(0, n_nodes, (n_edges,), device=device),
+        )
+
+    def test_forward_full(self, device):
+        """Test forward with full weight matrix."""
+        block = EdgeConditionedConvBlock(
+            latent_dim=16, edge_latent_dim=16,
+            edge_weight_type='full',
+        ).to(device)
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+        # Edges must be unchanged (passed through)
+        assert out.edges is graph.edges
+
+    def test_forward_vector(self, device):
+        """Test forward with per-channel vector gating."""
+        block = EdgeConditionedConvBlock(
+            latent_dim=16, edge_latent_dim=16,
+            edge_weight_type='vector',
+        ).to(device)
+        out = block(self._make_graph(device))
+        assert out.nodes.shape == (5, 16)
+
+    def test_forward_scalar(self, device):
+        """Test forward with scalar gating."""
+        block = EdgeConditionedConvBlock(
+            latent_dim=16, edge_latent_dim=16,
+            edge_weight_type='scalar',
+        ).to(device)
+        out = block(self._make_graph(device))
+        assert out.nodes.shape == (5, 16)
+
+    def test_mean_aggregation(self, device):
+        """Test with mean aggregation (used by Graph-PDE GNO)."""
+        block = EdgeConditionedConvBlock(
+            latent_dim=16, edge_latent_dim=16,
+            edge_weight_type='scalar', aggregate='mean',
+        ).to(device)
+        out = block(self._make_graph(device))
+        assert out.nodes.shape == (5, 16)
+
+    def test_no_root_no_bias(self, device):
+        """Test with root_weight=False and bias=False."""
+        block = EdgeConditionedConvBlock(
+            latent_dim=16, edge_latent_dim=16,
+            root_weight=False, bias=False,
+        ).to(device)
+        assert block.root is None
+        assert block.bias is None
+        out = block(self._make_graph(device))
+        assert out.nodes.shape == (5, 16)
+
+    def test_different_edge_dim(self, device):
+        """Test with edge_latent_dim != latent_dim."""
+        block = EdgeConditionedConvBlock(
+            latent_dim=16, edge_latent_dim=8,
+            edge_weight_type='scalar',
+        ).to(device)
+        graph = self._make_graph(device, edge_latent=8)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+
+    def test_invalid_weight_type_raises(self, device):
+        """Unknown edge_weight_type should raise ValueError."""
+        with pytest.raises(ValueError, match="Unknown edge_weight_type"):
+            EdgeConditionedConvBlock(
+                latent_dim=16, edge_latent_dim=16,
+                edge_weight_type='invalid',
+            )
+
+    def test_gradient_flow(self, device):
+        """Gradients must flow through edge_weight_net, root, and bias."""
+        block = EdgeConditionedConvBlock(
+            latent_dim=8, edge_latent_dim=8,
+            edge_weight_type='vector',
+        ).to(device)
+        graph = self._make_graph(device, latent=8, edge_latent=8, n_nodes=4, n_edges=6)
+        out = block(graph)
+        loss = out.nodes.sum()
+        loss.backward()
+        assert block.root.grad is not None
+        assert block.bias.grad is not None
+
+
+class TestGraphNetProcessorBlockFactory:
+    """Test GraphNetProcessor with custom block_factory."""
+
+    def test_with_edge_conditioned_blocks(self, device):
+        """Processor with EdgeConditionedConvBlock via block_factory."""
+        factory = partial(
+            EdgeConditionedConvBlock,
+            latent_dim=16, edge_latent_dim=16,
+            edge_weight_type='scalar', aggregate='mean',
+        )
+        processor = GraphNetProcessor(
+            latent_dim=16, n_layers=3,
+            block_factory=factory,
+        ).to(device)
+
+        graph = GraphsTuple(
+            nodes=torch.randn(5, 16, device=device),
+            edges=torch.randn(8, 16, device=device),
+            receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),
+            senders=torch.tensor([0, 1, 2, 3, 0, 1, 2, 3], device=device),
+            n_node=torch.tensor([5], device=device),
+            n_edge=torch.tensor([8], device=device),
+        )
+
+        out = processor(graph)
+        assert out.nodes.shape == (5, 16)
+        # Edges must be unchanged (EdgeConditionedConvBlock doesn't update edges)
+        assert torch.equal(out.edges, graph.edges)
+
+    def test_no_residual_with_factory(self, device):
+        """Non-residual mode with custom block_factory."""
+        factory = partial(
+            EdgeConditionedConvBlock,
+            latent_dim=8, edge_latent_dim=8,
+            edge_weight_type='scalar',
+        )
+        processor = GraphNetProcessor(
+            latent_dim=8, n_layers=2, residual=False,
+            block_factory=factory,
+        ).to(device)
+
+        graph = GraphsTuple(
+            nodes=torch.randn(4, 8, device=device),
+            edges=torch.randn(6, 8, device=device),
+            receivers=torch.randint(0, 4, (6,), device=device),
+            senders=torch.randint(0, 4, (6,), device=device),
+            n_node=torch.tensor([4], device=device),
+            n_edge=torch.tensor([6], device=device),
+        )
+
+        out = processor(graph)
+        assert out.nodes.shape == (4, 8)
+
+
+class TestEdgeConvBlock:
+    """Test EdgeConvBlock (DGCNN-style) message passing."""
+
+    def _make_graph(self, device, latent=16):
+        return GraphsTuple(
+            nodes=torch.randn(5, latent, device=device),
+            edges=torch.randn(8, latent, device=device),  # edge dim = latent
+            receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),
+            senders=torch.tensor([0, 1, 2, 3, 0, 1, 2, 3], device=device),
+            n_node=torch.tensor([5], device=device),
+            n_edge=torch.tensor([8], device=device),
+        )
+
+    def test_forward_default_max(self, device):
+        """Test forward with default Max aggregation."""
+        block = EdgeConvBlock(latent_dim=16).to(device)
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+
+    def test_forward_sum_aggregation(self, device):
+        """Test forward with sum aggregation."""
+        block = EdgeConvBlock(latent_dim=16, aggregate='sum').to(device)
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+
+    def test_forward_mean_aggregation(self, device):
+        """Test forward with mean aggregation."""
+        block = EdgeConvBlock(latent_dim=16, aggregate='mean').to(device)
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+
+    def test_updates_edges_false(self, device):
+        """Verify EdgeConvBlock does not update edges."""
+        block = EdgeConvBlock(latent_dim=16)
+        assert block.updates_edges is False
+
+    def test_is_subclass_of_message_passing_block(self, device):
+        """EdgeConvBlock must be a MessagePassingBlock subclass."""
+        assert issubclass(EdgeConvBlock, MessagePassingBlock)
+
+    def test_backward_compat_aggregate_fn(self, device):
+        """Legacy aggregate_fn still works."""
+        def custom_sum(messages, receivers, num_nodes):
+            return aggregate_edges(messages, receivers, num_nodes, 'sum')
+        
+        block = EdgeConvBlock(latent_dim=16, aggregate_fn=custom_sum).to(device)
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
 
 
 class TestGlobalGraphNetBlock:
@@ -764,3 +991,220 @@ class TestTransformerProcessor:
         out = processor(graph)
         
         assert out.nodes.shape == (15, 32)
+
+
+# ============================================================================
+# Aggregation Tests
+# ============================================================================
+
+import pytest
+from gnn_pde_v2.core.aggregation import Aggregation, Sum, Mean, Max, Min, get_aggregation
+from gnn_pde_v2.core.functional import aggregate_edges
+
+
+class TestAggregationProtocol:
+    """Test Aggregation Protocol and built-in implementations."""
+
+    def test_protocol_is_runtime_checkable(self):
+        """Verify Aggregation is runtime_checkable."""
+        assert hasattr(Aggregation, '_is_protocol')
+
+    def test_sum_satisfies_protocol(self):
+        """Sum() satisfies Aggregation Protocol."""
+        assert isinstance(Sum(), Aggregation)
+
+    def test_mean_satisfies_protocol(self):
+        """Mean() satisfies Aggregation Protocol."""
+        assert isinstance(Mean(), Aggregation)
+
+    def test_max_satisfies_protocol(self):
+        """Max() satisfies Aggregation Protocol."""
+        assert isinstance(Max(), Aggregation)
+
+    def test_min_satisfies_protocol(self):
+        """Min() satisfies Aggregation Protocol."""
+        assert isinstance(Min(), Aggregation)
+
+    def test_custom_callable_satisfies_protocol(self):
+        """Custom callable can satisfy Protocol via structural subtyping."""
+        def custom_agg(messages, receivers, num_nodes):
+            return aggregate_edges(messages, receivers, num_nodes, 'sum')
+        
+        # Structural check: callable with correct signature
+        assert callable(custom_agg)
+
+
+class TestBuiltInAggregations:
+    """Test built-in aggregation classes."""
+
+    @pytest.fixture
+    def messages(self, device):
+        return torch.tensor([
+            [1.0, 2.0],
+            [3.0, 4.0],
+            [5.0, 6.0],
+            [7.0, 8.0],
+        ], device=device)
+
+    @pytest.fixture
+    def receivers(self, device):
+        return torch.tensor([0, 0, 1, 1], device=device)
+
+    @pytest.fixture
+    def num_nodes(self):
+        return 2
+
+    def test_sum_aggregation(self, device, messages, receivers, num_nodes):
+        """Sum aggregation: node 0 gets [4, 6], node 1 gets [12, 14]."""
+        agg = Sum()
+        result = agg(messages, receivers, num_nodes)
+        
+        expected = torch.tensor([
+            [4.0, 6.0],   # 1+3, 2+4
+            [12.0, 14.0], # 5+7, 6+8
+        ], device=device)
+        
+        assert torch.allclose(result, expected)
+
+    def test_mean_aggregation(self, device, messages, receivers, num_nodes):
+        """Mean aggregation: node 0 gets [2, 3], node 1 gets [6, 7]."""
+        agg = Mean()
+        result = agg(messages, receivers, num_nodes)
+        
+        expected = torch.tensor([
+            [2.0, 3.0],   # (1+3)/2, (2+4)/2
+            [6.0, 7.0],   # (5+7)/2, (6+8)/2
+        ], device=device)
+        
+        assert torch.allclose(result, expected)
+
+    def test_max_aggregation(self, device, messages, receivers, num_nodes):
+        """Max aggregation: node 0 gets [3, 4], node 1 gets [7, 8]."""
+        agg = Max()
+        result = agg(messages, receivers, num_nodes)
+        
+        expected = torch.tensor([
+            [3.0, 4.0],   # max(1,3), max(2,4)
+            [7.0, 8.0],   # max(5,7), max(6,8)
+        ], device=device)
+        
+        assert torch.allclose(result, expected)
+
+    def test_min_aggregation(self, device, messages, receivers, num_nodes):
+        """Min aggregation: node 0 gets [1, 2], node 1 gets [5, 6]."""
+        agg = Min()
+        result = agg(messages, receivers, num_nodes)
+        
+        expected = torch.tensor([
+            [1.0, 2.0],   # min(1,3), min(2,4)
+            [5.0, 6.0],   # min(5,7), min(6,8)
+        ], device=device)
+        
+        assert torch.allclose(result, expected)
+
+
+class TestGetAggregation:
+    """Test get_aggregation utility function."""
+
+    def test_get_aggregation_with_instance(self):
+        """get_aggregation returns instance as-is."""
+        agg = Sum()
+        result = get_aggregation(agg)
+        assert result is agg
+
+    def test_get_aggregation_with_string(self):
+        """get_aggregation converts string to built-in."""
+        result = get_aggregation('sum')
+        assert isinstance(result, Sum)
+        
+        result = get_aggregation('max')
+        assert isinstance(result, Max)
+
+    def test_get_aggregation_with_callable(self):
+        """get_aggregation accepts custom callable."""
+        def custom(m, r, n):
+            return aggregate_edges(m, r, n, 'sum')
+        
+        result = get_aggregation(custom)
+        assert result is custom
+
+    def test_get_aggregation_invalid_string(self):
+        """get_aggregation raises on invalid string."""
+        with pytest.raises(ValueError, match="Unknown aggregation"):
+            get_aggregation('invalid')
+
+    def test_get_aggregation_invalid_type(self, device):
+        """get_aggregation raises on invalid type."""
+        with pytest.raises(TypeError, match="Aggregation instance"):
+            get_aggregation(123)
+
+
+class TestAggregationInMessagePassingBlock:
+    """Test Aggregation integration with MessagePassingBlock."""
+
+    def _make_graph(self, device):
+        return GraphsTuple(
+            nodes=torch.randn(5, 16, device=device),
+            edges=torch.randn(8, 16, device=device),  # edge dim must match latent_dim
+            receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),
+            senders=torch.tensor([0, 1, 2, 3, 0, 1, 2, 3], device=device),
+            n_node=torch.tensor([5], device=device),
+            n_edge=torch.tensor([8], device=device),
+        )
+
+    def test_aggregate_with_sum_instance(self, device):
+        """GraphNetBlock works with Sum() instance."""
+        block = GraphNetBlock(latent_dim=16, aggregate=Sum()).to(device)
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+
+    def test_aggregate_with_max_instance(self, device):
+        """GraphNetBlock works with Max() instance."""
+        block = GraphNetBlock(latent_dim=16, aggregate=Max()).to(device)
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+
+    def test_aggregate_with_string(self, device):
+        """GraphNetBlock works with string 'sum'."""
+        block = GraphNetBlock(latent_dim=16, aggregate='sum').to(device)
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+
+    def test_aggregate_with_string_max(self, device):
+        """GraphNetBlock works with string 'max'."""
+        block = GraphNetBlock(latent_dim=16, aggregate='max').to(device)
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+
+    def test_backward_compat_aggregate_fn(self, device):
+        """Legacy aggregate_fn still works."""
+        def custom_agg(messages, receivers, num_nodes):
+            return aggregate_edges(messages, receivers, num_nodes, 'sum')
+        
+        block = GraphNetBlock(latent_dim=16, aggregate_fn=custom_agg).to(device)
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+
+    def test_backward_compat_string_literal(self, device):
+        """Legacy aggregate='sum' still works."""
+        block = GraphNetBlock(latent_dim=16, aggregate='sum').to(device)
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+
+    def test_aggregate_fn_overrides_aggregate(self, device):
+        """aggregate_fn (deprecated) takes precedence over aggregate."""
+        # aggregate_fn should win (legacy behavior)
+        def custom_max(messages, receivers, num_nodes):
+            return aggregate_edges(messages, receivers, num_nodes, 'max')
+        
+        block = GraphNetBlock(latent_dim=16, aggregate='sum', aggregate_fn=custom_max).to(device)
+        # Should use aggregate_fn (max), not aggregate (sum)
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)

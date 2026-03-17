@@ -8,11 +8,13 @@ For graph-based processing, use processors.py (GraphNetProcessor) or
 transformer.py (TransformerProcessor).
 
 Classes:
-    SpectralConvBase: Abstract base class for spectral convolutions
-    SpectralConv: Standard (non-separable) spectral convolution layer
-    SeparableSpectralConv: Factorized spectral convolution for memory efficiency
-    FNOBlock: Single FNO block (spectral conv + MLP)
-    AFNOBlock: Adaptive FNO block with soft thresholding
+    SpectralConvBase: Abstract base for Fourier-domain mode-multiplication layers
+    SpectralConv: Full weight-tensor spectral (Fourier-domain) layer
+    SeparableSpectralConv: Factorized spectral layer for memory efficiency
+    SpectralBlockBase: Abstract base for FNO-style dual-branch (K + W) blocks
+    FNOBlock: Classic FNO block — σ(K(x) + W(x))
+    FNOMLPBlock: FNO block with channel MLP — channel_mlp(K(x) + W(x))
+    AFNOBlock: Adaptive FNO token mixer with block-diagonal weights
     FNOProcessor: Complete FNO pipeline with lifting/projection
 
 Factory:
@@ -402,21 +404,106 @@ class AFNOBlock(nn.Module):
         return x + self.bias.view(1, -1, *([1] * self.n_dim))
 
 
-class FNOBlock(nn.Module):
+class SpectralBlockBase(nn.Module, ABC):
     """
-    FNO block: Spectral convolution + pointwise MLP.
+    Abstract base for FNO-style dual-branch blocks.
+
+    Encapsulates the shared structure common to all FNO block variants
+    (Li et al. 2021, Eq. 3)::
+
+        out = K(x) + W(x)         # K = spectral_conv, W = pointwise linear
+        out = _post_branch(out)   # subclass-defined post-processing
+        if residual: out = x + out
+
+    Subclasses implement ``_post_branch`` to define what happens after the
+    two parallel branches are summed.
+
+    Attributes:
+        spectral_conv: The K operator — Fourier-domain learned mode
+            multiplications (a ``SpectralConvBase`` subclass).
+        W: The W operator — a pointwise 1×1 linear map running in parallel
+            with ``spectral_conv``.  This is **not** a residual/skip
+            connection; it is a learned linear transform.
 
     Args:
-        width: Hidden channel dimension
-        modes: Number of Fourier modes to keep per dimension
-        n_dim: Spatial dimension (1, 2, or 3)
-        activation: Activation function. Supports 'relu', 'gelu', 'silu', 'tanh',
-            'sigmoid', 'sin', or a callable/Module. Defaults to 'gelu'.
-        use_afno: Use Adaptive FNO block instead of standard spectral convolution
-        num_blocks: Number of blocks for AFNO (only used if use_afno=True)
-        separable: Use separable (factorized) spectral convolutions. When True,
-            uses SeparableSpectralConv instead of SpectralConv, reducing
-            memory from O(C^2 * prod(modes)) to O(n_dim * C^2 * max(modes)).
+        width: Hidden channel dimension.  Both branches map
+            ``width → width``, so input channels must equal ``width``.
+        modes: Number of Fourier modes to keep per dimension.
+        n_dim: Spatial dimension (1, 2, or 3).
+        separable: Use factorized spectral convolution. Reduces parameters from
+            O(C² · prod(modes)) to O(n_dim · C² · max(modes)).
+        residual: If ``True``, apply an outer residual: ``output = x + block(x)``.
+    """
+
+    def __init__(
+        self,
+        width: int,
+        modes: List[int],
+        n_dim: int,
+        separable: bool = False,
+        residual: bool = False,
+    ):
+        super().__init__()
+        self.width = width
+        self.n_dim = n_dim
+        self.residual = residual
+
+        # Spectral branch K: FFT → learned mode multiplication → IFFT
+        self.spectral_conv: SpectralConvBase = make_spectral_conv(
+            width, width, modes, separable=separable
+        )
+        # W operator: pointwise 1×1 linear map (Li et al. 2021, Eq. 3).
+        # NOT a skip/residual connection — this is a learned linear transform
+        # that runs in parallel with the spectral branch.
+        self.W: nn.Module = _get_conv_nd(n_dim, width, width, kernel_size=1)
+
+    @abstractmethod
+    def _post_branch(self, out: torch.Tensor) -> torch.Tensor:
+        """Post-process the result of K(x) + W(x).
+
+        Args:
+            out: [B, width, *spatial_dims] — the summed output of
+                ``spectral_conv(x) + W(x)``.
+
+        Returns:
+            Same shape as ``out``.
+        """
+        ...
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: [B, width, *spatial_dims]
+
+        Returns:
+            [B, width, *spatial_dims]
+        """
+        out = self.spectral_conv(x) + self.W(x)
+        out = self._post_branch(out)
+        if self.residual:
+            out = x + out
+        return out
+
+
+class FNOBlock(SpectralBlockBase):
+    """
+    Classic FNO block: activation(spectral_conv(x) + skip(x)).
+
+    Original formulation from Li et al. (2021)::
+
+        output = σ(K(x) + W(x))
+
+    where K is the spectral convolution and W is the pointwise skip.
+
+    Args:
+        width: Hidden channel dimension.
+        modes: Number of Fourier modes to keep per dimension.
+        n_dim: Spatial dimension (1, 2, or 3).
+        activation: Pointwise activation applied to the branch sum.
+            Supports 'relu', 'gelu', 'silu', 'tanh', 'sigmoid', 'sin', or a
+            callable/Module. Defaults to 'gelu'.
+        separable: Use factorized spectral convolutions.
+        residual: If ``True``, apply an outer skip: ``output = x + block(x)``.
     """
 
     def __init__(
@@ -425,39 +512,69 @@ class FNOBlock(nn.Module):
         modes: List[int],
         n_dim: int,
         activation: Union[str, nn.Module, Callable, None] = 'gelu',
-        use_afno: bool = False,
-        num_blocks: int = 8,
         separable: bool = False,
+        residual: bool = False,
     ):
-        super().__init__()
-
-        self.width = width
-        self.n_dim = n_dim
-
-        # Spectral convolution
-        if use_afno:
-            self.spectral_conv = AFNOBlock(width, num_blocks, n_dim=n_dim)
-        else:
-            self.spectral_conv = make_spectral_conv(width, width, modes, separable=separable)
-
-        # Pointwise MLP
-        self.mlp = _get_conv_nd(n_dim, width, width, kernel_size=1)
-
-        # Use shared activation factory from MLP
+        super().__init__(width, modes, n_dim, separable=separable, residual=residual)
         self.activation = MLP._make_activation(activation)
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Args:
-            x: [B, C, *spatial_dims]
-        """
-        # Spectral branch
-        x1 = self.spectral_conv(x)
+    def _post_branch(self, out: torch.Tensor) -> torch.Tensor:
+        return self.activation(out)
 
-        # Pointwise branch
-        x2 = self.mlp(x)
 
-        return self.activation(x1 + x2)
+class FNOMLPBlock(SpectralBlockBase):
+    """
+    FNO block with a channel MLP replacing the plain pointwise activation.
+
+    A sibling of :class:`FNOBlock` sharing the same :class:`SpectralBlockBase`
+    skeleton.  Where ``FNOBlock`` applies a single activation after the branch
+    sum, this class applies a two-layer pointwise MLP — the pattern used in the
+    neuraloperator library::
+
+        out = channel_mlp(spectral_conv(x) + skip(x))   [+ x if residual]
+
+    The channel MLP uses 1×1 convolutions (spatial dimensions are never mixed),
+    acting purely as a per-point nonlinear channel mixer.
+
+    Args:
+        width: Hidden channel dimension.
+        modes: Number of Fourier modes to keep per dimension.
+        n_dim: Spatial dimension (1, 2, or 3).
+        channel_mlp_ratio: Hidden-to-width ratio for the channel MLP.
+            Hidden size = ``max(1, int(ratio * width))``. Defaults to ``0.5``.
+        channel_mlp_dropout: Dropout rate inside the channel MLP.
+        activation: Internal activation used by the channel MLP (applied
+            between the two pointwise layers). Defaults to 'gelu'.
+        separable: Use factorized spectral convolutions.
+        residual: If ``True``, apply an outer skip: ``output = x + block(x)``.
+    """
+
+    def __init__(
+        self,
+        width: int,
+        modes: List[int],
+        n_dim: int,
+        channel_mlp_ratio: float = 0.5,
+        channel_mlp_dropout: float = 0.0,
+        activation: Union[str, nn.Module, Callable, None] = 'gelu',
+        separable: bool = False,
+        residual: bool = False,
+    ):
+        super().__init__(width, modes, n_dim, separable=separable, residual=residual)
+        mlp_hidden = max(1, int(width * channel_mlp_ratio))
+        self.channel_mlp = MLP(
+            in_dim=width,
+            out_dim=width,
+            hidden_dims=[mlp_hidden],
+            activation=activation,
+            dropout=channel_mlp_dropout,
+            norm=None,
+            linear_factory=lambda a, b: _get_conv_nd(n_dim, a, b),
+            use_layer_norm=False,
+        )
+
+    def _post_branch(self, out: torch.Tensor) -> torch.Tensor:
+        return self.channel_mlp(out)
 
 
 class FNOProcessor(nn.Module):
@@ -508,18 +625,24 @@ class FNOProcessor(nn.Module):
         # Lifting layer
         self.lifting = _get_conv_nd(n_dim, in_channels, width, kernel_size=1)
 
-        # FNO blocks
-        self.blocks = nn.ModuleList([
-            FNOBlock(
-                width=width,
-                modes=modes,
-                n_dim=n_dim,
-                use_afno=use_afno,
-                num_blocks=num_blocks,
-                separable=separable,
-            )
-            for _ in range(n_layers)
-        ])
+        # FNO blocks — AFNOBlock is instantiated directly to keep it separate
+        # from the FNOBlock abstraction (which owns the spectral+skip+activation
+        # combinatorics for standard FNO variants).
+        if use_afno:
+            self.blocks: nn.ModuleList = nn.ModuleList([
+                AFNOBlock(width, num_blocks, n_dim=n_dim)
+                for _ in range(n_layers)
+            ])
+        else:
+            self.blocks = nn.ModuleList([
+                FNOBlock(
+                    width=width,
+                    modes=modes,
+                    n_dim=n_dim,
+                    separable=separable,
+                )
+                for _ in range(n_layers)
+            ])
 
         # Projection layer
         self.projection = _get_conv_nd(n_dim, width, out_channels, kernel_size=1)
@@ -558,8 +681,10 @@ __all__ = [
     "SpectralConvBase",
     "SpectralConv",
     "SeparableSpectralConv",
-    # FNO components
-    "AFNOBlock",
+    # FNO block base and variants
+    "SpectralBlockBase",
     "FNOBlock",
+    "FNOMLPBlock",
+    "AFNOBlock",
     "FNOProcessor",
 ]

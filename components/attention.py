@@ -755,17 +755,42 @@ class PhysicsTokenAttention(nn.Module):
     """
     Transolver-style slice-attention-deslice attention.
     
-    Reduces complexity from O(N^2) to O(G^2) where G << N (learnable physics tokens).
+    Reduces complexity from O(N^2) to O(G^2) where G << N (physics tokens).
+    This implementation supports both paper-faithful mode and extended features.
     
-    Supports adaptive temperature mechanisms for controlling attention distribution
-    sharpness based on local physical properties.
+    Paper Reference:
+        Wu et al. "Transolver: A Fast Transformer Solver for PDEs on General 
+        Geometries." ICML 2024.
     
-    Temperature modes:
-        - 'fixed': Fixed temperature (backward compatible, default)
-        - 'learnable_scalar': Global learnable temperature
-        - 'per_head': Per-head learnable temperature
-        - 'adaptive': Per-point adaptive temperature (Ada-Temp from Transolver++)
-        - 'annealed': Training-time temperature annealing schedule
+    Architecture (from paper):
+        1. Slice: Project N mesh points to G physics-aware tokens
+        2. Attention: Self-attention among the G tokens (O(G^2))
+        3. Deslice: Map tokens back to N points
+    
+    Args:
+        dim: Model dimension
+        n_tokens: Number of physics tokens (G in paper, called slice_num in original)
+        n_heads: Number of attention heads
+        dropout: Dropout rate
+        temperature: Initial temperature value
+        temperature_mode: Temperature scheduling mode
+        use_gumbel_softmax: Enable Gumbel-Softmax for differentiable slicing (Transolver++)
+        min_temperature: Minimum temperature for learnable modes
+        
+        # Paper Fidelity Options
+        use_slice_normalization: If True (default), apply slice normalization from paper.
+            Critical for proper token aggregation - divides by number of points per slice.
+        use_learnable_tokens: If False (default, paper-faithful), tokens are computed
+            purely from input. If True, adds learnable token bias (framework extension).
+        qkv_mode: 'direct' (paper-faithful) uses per-head Q/K/V linears,
+            'multihead' uses framework's MultiHeadAttention wrapper.
+        use_orthogonal_init: If True, apply orthogonal initialization to slice
+            projection (recommended in paper for better geometric structure).
+            
+        # Annealing parameters (for 'annealed' temperature mode)
+        anneal_warmup_epochs: Epochs before annealing starts
+        anneal_factor: Temperature decay factor per epoch
+        anneal_final_temp: Final temperature after annealing
     """
     
     def __init__(
@@ -773,10 +798,16 @@ class PhysicsTokenAttention(nn.Module):
         dim: int,
         n_tokens: int = 32,
         n_heads: int = 8,
-        temperature: float = 1.0,
-        temperature_mode: str = 'fixed',
+        dropout: float = 0.0,
+        temperature: float = 0.5,
+        temperature_mode: str = 'learnable_scalar',
         use_gumbel_softmax: bool = False,
         min_temperature: float = 0.1,
+        # Paper fidelity options
+        use_slice_normalization: bool = True,
+        use_learnable_tokens: bool = False,
+        qkv_mode: str = 'direct',
+        use_orthogonal_init: bool = True,
         # Annealing parameters (for 'annealed' mode)
         anneal_warmup_epochs: int = 5,
         anneal_factor: float = 0.98,
@@ -784,25 +815,59 @@ class PhysicsTokenAttention(nn.Module):
     ):
         super().__init__()
         
+        assert dim % n_heads == 0, f"dim {dim} must be divisible by n_heads {n_heads}"
+        
         self.dim = dim
         self.n_tokens = n_tokens
         self.n_heads = n_heads
         self.head_dim = dim // n_heads
+        self.inner_dim = self.head_dim * n_heads
         self.temperature_mode = temperature_mode
         self.use_gumbel_softmax = use_gumbel_softmax
+        self.use_slice_normalization = use_slice_normalization
+        self.use_learnable_tokens = use_learnable_tokens
+        self.qkv_mode = qkv_mode
         
-        # Learnable physics tokens
-        self.tokens = nn.Parameter(torch.randn(1, n_tokens, dim) * 0.02)
+        # Paper uses two-branch projection:
+        # - in_project_x: for computing slice weights
+        # - in_project_fx: for computing slice content
+        if qkv_mode == 'direct':
+            # Paper-faithful: two separate projections
+            self.in_project_x = nn.Linear(dim, self.inner_dim)
+            self.in_project_fx = nn.Linear(dim, self.inner_dim)
+        else:
+            # Framework style: single content projection
+            self.slice_content_proj = nn.Linear(dim, dim)
+            
+        # Slice projection: head_dim -> n_tokens (G)
+        self.slice_weight_proj = nn.Linear(self.head_dim, n_tokens)
+        if use_orthogonal_init:
+            nn.init.orthogonal_(self.slice_weight_proj.weight)
         
-        # Two-branch projection for slice weights
-        self.slice_weight_proj = nn.Linear(dim, n_heads * n_tokens)
-        self.slice_content_proj = nn.Linear(dim, dim)
+        # Optional learnable token bias (framework extension, NOT in paper)
+        if use_learnable_tokens:
+            self.tokens = nn.Parameter(torch.randn(1, n_tokens, dim) * 0.02)
+        else:
+            self.register_buffer('tokens', None)
         
-        # Attention on tokens
-        self.token_attention = MultiHeadAttention(dim, n_heads)
-        
-        # Deslice projection
-        self.deslice_proj = nn.Linear(dim, dim)
+        # Token attention
+        if qkv_mode == 'direct':
+            # Paper-faithful: per-head Q/K/V linears
+            self.to_q = nn.Linear(self.head_dim, self.head_dim, bias=False)
+            self.to_k = nn.Linear(self.head_dim, self.head_dim, bias=False)
+            self.to_v = nn.Linear(self.head_dim, self.head_dim, bias=False)
+            self.scale = self.head_dim ** -0.5
+            self.token_attention = None
+        else:
+            # Framework style: MultiHeadAttention wrapper
+            self.to_q = self.to_k = self.to_v = None
+            self.token_attention = MultiHeadAttention(dim, n_heads, dropout)
+            
+        # Output projection
+        self.to_out = nn.Sequential(
+            nn.Linear(self.inner_dim, dim),
+            nn.Dropout(dropout)
+        )
         
         # Temperature mechanism
         self.temperature_module = create_temperature_module(
@@ -832,14 +897,25 @@ class PhysicsTokenAttention(nn.Module):
         B, N, D = x.shape
         H = self.n_heads
         G = self.n_tokens
+        d = self.head_dim
         
         # --- Slice: Project N points to G tokens ---
         
-        # Slice weights: [B, N, H*G] -> [B, H, N, G]
-        slice_logits = self.slice_weight_proj(x).reshape(B, N, H, G).permute(0, 2, 1, 3)
+        if self.qkv_mode == 'direct':
+            # Paper-faithful two-branch projection
+            # Branch 1: for slice weights (x)
+            x_mid = self.in_project_x(x).reshape(B, N, H, d).permute(0, 2, 1, 3)  # [B, H, N, d]
+            # Branch 2: for slice content (fx)
+            fx_mid = self.in_project_fx(x).reshape(B, N, H, d).permute(0, 2, 1, 3)  # [B, H, N, d]
+        else:
+            # Framework style: single projection for content
+            x_mid = x.reshape(B, N, H, d).permute(0, 2, 1, 3)  # [B, H, N, d]
+            fx_mid = self.slice_content_proj(x).reshape(B, N, H, d).permute(0, 2, 1, 3)
         
-        # Optional Gumbel-Softmax noise (applied before temperature scaling)
-        # Following Transolver++ Eq. 4: Rep-Slice(x, τ) = Softmax((Linear(x) - log(-log ε)) / τ)
+        # Compute slice weights: [B, H, N, G]
+        slice_logits = self.slice_weight_proj(x_mid)
+        
+        # Optional Gumbel-Softmax noise (Transolver++ feature)
         if self.use_gumbel_softmax and self.training:
             epsilon = torch.rand_like(slice_logits)
             gumbel_noise = -torch.log(-torch.log(epsilon + 1e-10) + 1e-10)
@@ -850,28 +926,44 @@ class PhysicsTokenAttention(nn.Module):
         
         slice_weights = torch.softmax(slice_logits, dim=-1)  # [B, H, N, G]
         
-        # Content projection: [B, N, D] -> [B, N, D]
-        content = self.slice_content_proj(x)
-        content = content.reshape(B, N, H, self.head_dim).permute(0, 2, 1, 3)  # [B, H, N, d]
+        # Slice to tokens: weighted aggregation
+        # [B, H, N, d] @ [B, H, N, G].T -> [B, H, G, d]
+        tokens = torch.einsum('bhnd,bhng->bhgd', fx_mid, slice_weights)
         
-        # Slice to tokens: [B, H, N, d] @ [B, H, N, G].T -> [B, H, G, d]
-        tokens = torch.einsum('bhnd,bhng->bhgd', content, slice_weights)
-        tokens = tokens.permute(0, 2, 1, 3).reshape(B, G, D)  # [B, G, D]
-        
-        # Add learnable token bias
-        tokens = tokens + self.tokens
+        # Slice normalization (CRITICAL from paper!)
+        # Normalizes by number of points assigned to each slice
+        if self.use_slice_normalization:
+            slice_norm = slice_weights.sum(dim=2, keepdim=True)  # [B, H, 1, G]
+            tokens = tokens / (slice_norm.transpose(-2, -1) + 1e-5)  # [B, H, G, d]
         
         # --- Attention: Process G tokens ---
-        tokens = self.token_attention(tokens)  # [B, G, D]
+        
+        if self.qkv_mode == 'direct':
+            # Paper-faithful: direct QKV attention on tokens
+            # tokens: [B, H, G, d]
+            q = self.to_q(tokens)  # [B, H, G, d]
+            k = self.to_k(tokens)  # [B, H, G, d]
+            v = self.to_v(tokens)  # [B, H, G, d]
+            
+            # Scaled dot-product attention
+            dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale  # [B, H, G, G]
+            attn = torch.softmax(dots, dim=-1)
+            tokens_out = torch.matmul(attn, v)  # [B, H, G, d]
+        else:
+            # Framework style: use MultiHeadAttention wrapper
+            tokens = tokens.permute(0, 2, 1, 3).reshape(B, G, D)  # [B, G, D]
+            if self.tokens is not None:
+                tokens = tokens + self.tokens
+            tokens_out = self.token_attention(tokens)  # [B, G, D]
+            tokens_out = tokens_out.reshape(B, G, H, d).permute(0, 2, 1, 3)  # [B, H, G, d]
         
         # --- Deslice: Distribute tokens back to N points ---
-        tokens = tokens.reshape(B, G, H, self.head_dim).permute(0, 2, 1, 3)  # [B, H, G, d]
         
-        # Deslice: [B, H, G, d] @ [B, H, N, G] -> [B, H, N, d]
-        out = torch.einsum('bhgd,bhng->bhnd', tokens, slice_weights)
-        out = out.permute(0, 2, 1, 3).reshape(B, N, D)  # [B, N, D]
+        # [B, H, G, d] @ [B, H, N, G].T -> [B, H, N, d]
+        out = torch.einsum('bhgd,bhng->bhnd', tokens_out, slice_weights)
+        out = out.permute(0, 2, 1, 3).reshape(B, N, self.inner_dim)  # [B, N, inner_dim]
         
-        out = self.deslice_proj(out)
+        out = self.to_out(out)
         
         if single_batch:
             out = out.squeeze(0)

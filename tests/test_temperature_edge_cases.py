@@ -46,7 +46,7 @@ class TestInputShapes:
     
     def test_single_batch_2d_input(self):
         """Test with 2D input [N, D]."""
-        from gnn_pde_v2.components.transformer import PhysicsTokenAttention
+        from gnn_pde_v2.components.attention import PhysicsTokenAttention
         
         attn = PhysicsTokenAttention(
             dim=64,
@@ -62,7 +62,7 @@ class TestInputShapes:
     
     def test_batched_3d_input(self):
         """Test with 3D input [B, N, D]."""
-        from gnn_pde_v2.components.transformer import PhysicsTokenAttention
+        from gnn_pde_v2.components.attention import PhysicsTokenAttention
         
         attn = PhysicsTokenAttention(
             dim=64,
@@ -78,7 +78,7 @@ class TestInputShapes:
     
     def test_varying_batch_sizes(self):
         """Test with different batch sizes."""
-        from gnn_pde_v2.components.transformer import PhysicsTokenAttention
+        from gnn_pde_v2.components.attention import PhysicsTokenAttention
         
         attn = PhysicsTokenAttention(
             dim=64,
@@ -94,7 +94,7 @@ class TestInputShapes:
     
     def test_varying_sequence_lengths(self):
         """Test with different sequence lengths."""
-        from gnn_pde_v2.components.transformer import PhysicsTokenAttention
+        from gnn_pde_v2.components.attention import PhysicsTokenAttention
         
         attn = PhysicsTokenAttention(
             dim=64,
@@ -205,7 +205,7 @@ class TestDevicePlacement:
     
     def test_attention_on_device(self, device):
         """Test PhysicsTokenAttention on correct device."""
-        from gnn_pde_v2.components.transformer import PhysicsTokenAttention
+        from gnn_pde_v2.components.attention import PhysicsTokenAttention
         
         attn = PhysicsTokenAttention(
             dim=64,
@@ -259,7 +259,7 @@ class TestBackwardCompatibility:
     
     def test_default_temperature_mode(self):
         """Test default temperature mode is 'fixed'."""
-        from gnn_pde_v2.components.transformer import PhysicsTokenAttention
+        from gnn_pde_v2.components.attention import PhysicsTokenAttention
         
         attn = PhysicsTokenAttention(dim=64, n_tokens=8, n_heads=4)
         
@@ -267,7 +267,7 @@ class TestBackwardCompatibility:
     
     def test_old_api_compatibility(self):
         """Test old API with temperature parameter still works."""
-        from gnn_pde_v2.components.transformer import PhysicsTokenAttention
+        from gnn_pde_v2.components.attention import PhysicsTokenAttention
         
         # Old API: passing temperature directly
         attn = PhysicsTokenAttention(

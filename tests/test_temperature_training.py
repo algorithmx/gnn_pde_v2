@@ -83,7 +83,7 @@ class TestAnnealingSchedule:
     
     def test_annealing_affects_forward(self):
         """Test different epochs produce different outputs."""
-        from gnn_pde_v2.components.transformer import PhysicsTokenAttention
+        from gnn_pde_v2.components.attention import PhysicsTokenAttention
         
         attn = PhysicsTokenAttention(
             dim=64,
@@ -111,7 +111,7 @@ class TestTrainingConvergence:
     
     def test_fixed_temperature_training(self):
         """Test training with fixed temperature."""
-        from gnn_pde_v2.components.transformer import PhysicsTokenAttention
+        from gnn_pde_v2.components.attention import PhysicsTokenAttention
         
         attn = PhysicsTokenAttention(
             dim=32,
@@ -136,7 +136,7 @@ class TestTrainingConvergence:
     
     def test_learnable_temperature_training(self):
         """Test training with learnable temperature."""
-        from gnn_pde_v2.components.transformer import PhysicsTokenAttention
+        from gnn_pde_v2.components.attention import PhysicsTokenAttention
         
         attn = PhysicsTokenAttention(
             dim=32,
@@ -161,7 +161,7 @@ class TestTrainingConvergence:
     
     def test_adaptive_temperature_training(self):
         """Test training with adaptive temperature."""
-        from gnn_pde_v2.components.transformer import PhysicsTokenAttention
+        from gnn_pde_v2.components.attention import PhysicsTokenAttention
         
         attn = PhysicsTokenAttention(
             dim=32,

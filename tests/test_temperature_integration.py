@@ -12,8 +12,8 @@ from gnn_pde_v2.components.temperature import (
     AdaptiveTemperature,
     PerHeadTemperature,
 )
+from gnn_pde_v2.components.attention import PhysicsTokenAttention
 from gnn_pde_v2.components.transformer import (
-    PhysicsTokenAttention,
     TransformerBlock,
     TransformerProcessor,
 )

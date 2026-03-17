@@ -26,6 +26,9 @@ __all__ = ['TransformerBlock', 'TransformerProcessor']
 class TransformerBlock(nn.Module):
     """
     Transformer block with optional physics token attention and relative position encoding.
+    
+    When use_physics_tokens=True, uses Transolver-style slice-attention-deslice
+    attention which reduces complexity from O(N^2) to O(G^2) where G << N.
     """
     
     def __init__(
@@ -42,13 +45,18 @@ class TransformerBlock(nn.Module):
         num_position_buckets: int = 32,
         position_encoding_type: str = 'learned',
         # Temperature parameters (only used when use_physics_tokens=True)
-        temperature: float = 1.0,
-        temperature_mode: str = 'fixed',
+        temperature: float = 0.5,
+        temperature_mode: str = 'learnable_scalar',
         use_gumbel_softmax: bool = False,
         min_temperature: float = 0.1,
         anneal_warmup_epochs: int = 5,
         anneal_factor: float = 0.98,
         anneal_final_temp: float = 0.05,
+        # Paper-fidelity parameters (only used when use_physics_tokens=True)
+        use_slice_normalization: bool = True,
+        use_learnable_tokens: bool = False,
+        qkv_mode: str = 'direct',
+        use_orthogonal_init: bool = True,
     ):
         super().__init__()
         
@@ -61,6 +69,7 @@ class TransformerBlock(nn.Module):
                 dim=dim,
                 n_tokens=n_tokens,
                 n_heads=n_heads,
+                dropout=dropout,
                 temperature=temperature,
                 temperature_mode=temperature_mode,
                 use_gumbel_softmax=use_gumbel_softmax,
@@ -68,6 +77,10 @@ class TransformerBlock(nn.Module):
                 anneal_warmup_epochs=anneal_warmup_epochs,
                 anneal_factor=anneal_factor,
                 anneal_final_temp=anneal_final_temp,
+                use_slice_normalization=use_slice_normalization,
+                use_learnable_tokens=use_learnable_tokens,
+                qkv_mode=qkv_mode,
+                use_orthogonal_init=use_orthogonal_init,
             )
         else:
             self.attn = _attention.MultiHeadAttention(
@@ -142,13 +155,18 @@ class TransformerProcessor(nn.Module):
         num_position_buckets: int = 32,
         position_encoding_type: str = 'learned',
         # Temperature parameters (only used when use_physics_tokens=True)
-        temperature: float = 1.0,
-        temperature_mode: str = 'fixed',
+        temperature: float = 0.5,
+        temperature_mode: str = 'learnable_scalar',
         use_gumbel_softmax: bool = False,
         min_temperature: float = 0.1,
         anneal_warmup_epochs: int = 5,
         anneal_factor: float = 0.98,
         anneal_final_temp: float = 0.05,
+        # Paper-fidelity parameters (only used when use_physics_tokens=True)
+        use_slice_normalization: bool = True,
+        use_learnable_tokens: bool = False,
+        qkv_mode: str = 'direct',
+        use_orthogonal_init: bool = True,
     ):
         super().__init__()
 
@@ -174,6 +192,10 @@ class TransformerProcessor(nn.Module):
                 anneal_warmup_epochs=anneal_warmup_epochs,
                 anneal_factor=anneal_factor,
                 anneal_final_temp=anneal_final_temp,
+                use_slice_normalization=use_slice_normalization,
+                use_learnable_tokens=use_learnable_tokens,
+                qkv_mode=qkv_mode,
+                use_orthogonal_init=use_orthogonal_init,
             )
             for _ in range(n_layers)
         ])

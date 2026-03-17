@@ -6,11 +6,11 @@ Includes:
 - HierarchicalFNO: FNO with hierarchical processing
 """
 
-from typing import List, Optional
+from typing import List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
-from ..components.spectral import _get_conv_nd
+from ..components.spectral import _get_conv_nd, FNOBlock
 from ..components.multiscale import (
     MultiResolutionFNOBlock,
     UFNOBlock,
@@ -61,6 +61,8 @@ class MultiscaleFNO(nn.Module):
         architecture: str = "ufno",
         unet_depth: int = 2,
         activation: str = "gelu",
+        padding: Optional[Union[int, Tuple[int, ...]]] = None,
+        n_fourier_layers: int = 0,
     ):
         super().__init__()
         self.in_channels = in_channels
@@ -68,14 +70,30 @@ class MultiscaleFNO(nn.Module):
         self.width = width
         self.n_dim = n_dim
         self.architecture = architecture
+        self.padding = padding
+        self.padding_sizes = padding
+        self.n_fourier_layers = n_fourier_layers
         
         # Lifting layer
         self.lifting = _get_conv_nd(n_dim, in_channels, width, kernel_size=1)
         
         # FNO blocks based on architecture
+        # If n_fourier_layers > 0, first n_fourier_layers use standard FNO, rest use specified architecture
         self.blocks = nn.ModuleList()
-        for _ in range(n_layers):
-            if architecture == "multiband":
+        for i in range(n_layers):
+            # Determine which block type to use
+            use_standard_fno = (architecture == "ufno" and 
+                                n_fourier_layers > 0 and 
+                                i < n_fourier_layers)
+            
+            if use_standard_fno:
+                block = FNOBlock(
+                    width=width,
+                    modes=modes,
+                    n_dim=n_dim,
+                    activation=activation,
+                )
+            elif architecture == "multiband":
                 block = MultiResolutionFNOBlock(
                     width=width,
                     modes_list=[[m//2 for m in modes], modes, [m*2 for m in modes]],
@@ -99,7 +117,6 @@ class MultiscaleFNO(nn.Module):
                     activation=activation,
                 )
             else:  # standard
-                from ..components.spectral import FNOBlock
                 block = FNOBlock(
                     width=width,
                     modes=modes,
@@ -111,6 +128,58 @@ class MultiscaleFNO(nn.Module):
         # Projection layer
         self.projection = _get_conv_nd(n_dim, width, out_channels, kernel_size=1)
     
+    def _pad(self, x: torch.Tensor) -> torch.Tensor:
+        """Apply padding for non-periodic boundaries."""
+        if self.padding_sizes is None:
+            return x
+        
+        # Convert single int or short tuple to full pad format
+        if isinstance(self.padding_sizes, int):
+            # Single int: same padding on all sides for all dims
+            pad_sizes = tuple([self.padding_sizes] * (self.n_dim * 2))
+        elif len(self.padding_sizes) == self.n_dim:
+            # Tuple of length n_dim: (d0, d1, d2) -> expand to (d0, d0, d1, d1, d2, d2)
+            pad_sizes = tuple(v for p in self.padding_sizes for v in (p, p))
+        else:
+            # Already in full format
+            pad_sizes = self.padding_sizes
+        
+        # Pad format for nn.functional.pad: (dimN_left, dimN_right, ..., dim0_left, dim0_right)
+        # For 3D: (d2_left, d2_right, d1_left, d1_right, d0_left, d0_right)
+        # Reverse to match expected order
+        pad_sizes = pad_sizes[::-1]
+        
+        return nn.functional.pad(x, pad_sizes, mode='replicate')
+    
+    def _unpad(self, x: torch.Tensor, original_shape: Tuple[int, ...]) -> torch.Tensor:
+        """Remove padding to restore original shape."""
+        if self.padding_sizes is None:
+            return x
+        
+        # Extract pad values - support same formats as _pad
+        if isinstance(self.padding_sizes, int):
+            pad_values = [self.padding_sizes] * self.n_dim
+        elif len(self.padding_sizes) == self.n_dim:
+            pad_values = list(self.padding_sizes)
+        else:
+            pad_values = self.padding_sizes[::2]
+        
+        # Unpad based on n_dim
+        # padding convention: padding[i] corresponds to dimension i in spatial dims
+        # For shape [B, C, D, H, W] (3D), padding[0]=D_pad, padding[1]=H_pad, padding[2]=W_pad
+        if self.n_dim == 1:
+            p = pad_values[0] if pad_values else 0
+            return x[..., p:-p] if p > 0 else x
+        elif self.n_dim == 2:
+            p0 = pad_values[0] if pad_values else 0  # H padding
+            p1 = pad_values[1] if len(pad_values) > 1 else 0  # W padding
+            return x[..., p0:-p0, p1:-p1] if p0 > 0 or p1 > 0 else x
+        else:  # 3D
+            p0 = pad_values[0] if pad_values else 0  # D padding
+            p1 = pad_values[1] if len(pad_values) > 1 else 0  # H padding
+            p2 = pad_values[2] if len(pad_values) > 2 else 0  # W padding
+            return x[..., p0:-p0, p1:-p1, p2:-p2] if p0 > 0 or p1 > 0 or p2 > 0 else x
+    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Forward pass.
         
@@ -120,6 +189,12 @@ class MultiscaleFNO(nn.Module):
         Returns:
             Output [B, out_channels, *spatial_dims]
         """
+        # Store original shape for unpadding
+        original_shape = x.shape
+        
+        # Pad for non-periodic boundaries
+        x = self._pad(x)
+        
         # Lift
         x = self.lifting(x)
         
@@ -129,6 +204,9 @@ class MultiscaleFNO(nn.Module):
         
         # Project
         x = self.projection(x)
+        
+        # Unpad
+        x = self._unpad(x, original_shape)
         
         return x
     

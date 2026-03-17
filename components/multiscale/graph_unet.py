@@ -187,8 +187,11 @@ class GraphUNetProcessor(nn.Module):
             Processed graph
         """
         x = graph
+        # encoder_outputs stores pre-pool features at each level (for skip connections)
         encoder_outputs = []
         indices_list = []
+        # original_sizes[j] = node count before the j-th pooling operation
+        original_sizes = []
         
         # Encoder path
         for i, encoder in enumerate(self.encoders):
@@ -201,21 +204,30 @@ class GraphUNetProcessor(nn.Module):
                 else:
                     target_k = int(num_nodes * 0.5)
             
-            # Process and pool
-            x, indices = encoder(x, target_k=target_k)
-            encoder_outputs.append(x)
-            if indices is not None:
+            # Process only (pass target_k=None so encoder skips its internal pool)
+            x_processed, _ = encoder(x, target_k=None)
+            
+            # Save pre-pool features for skip connections
+            encoder_outputs.append(x_processed)
+            
+            # Pool separately, recording the pre-pool node count
+            if target_k is not None:
+                original_sizes.append(x_processed.nodes.shape[0])
+                device = x_processed.nodes.device
+                pool = GraphPool(k=target_k, feature_dim=self.latent_dim).to(device)
+                x, indices = pool(x_processed)
                 indices_list.append(indices)
+            else:
+                x = x_processed
         
         # Decoder path
         for i in range(self.n_levels - 1, -1, -1):
-            # Unpool to match encoder level size
+            # Unpool using the stored pre-pool size so indices are in-bounds
             if i < len(indices_list):
-                # Get original size from encoder output
-                original_size = encoder_outputs[i].nodes.shape[0] if encoder_outputs[i].nodes is not None else x.nodes.shape[0]
+                original_size = original_sizes[i]
                 x = self.unpool(x, indices_list[i], original_size)
             
-            # Skip connection
+            # Skip connection with pre-pool encoder features (sizes now match)
             if i < len(encoder_outputs):
                 skip = encoder_outputs[i]
                 if self.skip_connection == "concat" and x.nodes is not None and skip.nodes is not None:

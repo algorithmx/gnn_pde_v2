@@ -78,7 +78,7 @@ class TestTransolverPlusPlus:
         """Test Gumbel-Softmax formula from Transolver++ Eq. 4:
         Rep-Slice(x, τ) = Softmax((Linear(x) - log(-log ε)) / τ)
         """
-        from gnn_pde_v2.components.transformer import PhysicsTokenAttention
+        from gnn_pde_v2.components.attention import PhysicsTokenAttention
         
         attn = PhysicsTokenAttention(
             dim=64,
@@ -98,7 +98,7 @@ class TestTransolverPlusPlus:
     
     def test_gumbel_softmax_during_inference(self):
         """Test Gumbel-Softmax is disabled during inference."""
-        from gnn_pde_v2.components.transformer import PhysicsTokenAttention
+        from gnn_pde_v2.components.attention import PhysicsTokenAttention
         
         attn = PhysicsTokenAttention(
             dim=64,

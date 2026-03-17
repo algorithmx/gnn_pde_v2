@@ -49,7 +49,6 @@ class FNO(nn.Module):
             modes=modes,
             n_layers=n_layers,
             n_dim=n_dim,
-            use_afno=False,
         )
         
         self.n_dim = n_dim
@@ -109,7 +108,6 @@ class TFNO(nn.Module):
             modes=modes,
             n_layers=n_layers,
             n_dim=n_dim,
-            use_afno=False,
             separable=True,  # Key difference from FNO: factorized weights
         )
 

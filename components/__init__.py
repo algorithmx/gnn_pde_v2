@@ -52,8 +52,10 @@ from .processors import (
     MessagePassingBlock,
     GraphNetBlock, GraphNetProcessor,
     EdgeConditionedConvBlock,
+    EdgeConvBlock,
     GlobalGraphNetBlock, GlobalGraphNetProcessor,
 )
+from .gcn import GCNBlock, GCNBlockWithEdgeFeatures
 from .decoders import MLPDecoder, IndependentMLPDecoder
 from .probe import ProbeDecoder, ProbeMessagePassingLayer
 from .transformer import (
@@ -79,7 +81,10 @@ from .temperature import (
     AnnealedTemperature,
     create_temperature_module,
 )
-from .spectral import FNOProcessor, SpectralConv, SeparableSpectralConv, SpectralConvBase, make_spectral_conv, FNOBlock, AFNOBlock
+from .spectral import (
+    FNOProcessor, SpectralConv, SeparableSpectralConv, SpectralConvBase,
+    make_spectral_conv, SpectralBlockBase, FNOBlock, FNOMLPBlock, AFNOBlock,
+)
 
 # Structural protocols — re-exported here for convenience since they describe
 # component contracts. Conditioning types (Modulation, ConditioningProtocol)
@@ -107,9 +112,12 @@ __all__ = [
     "MessagePassingBlock",
     "GraphNetBlock",
     "EdgeConditionedConvBlock",
+    "EdgeConvBlock",
     "GlobalGraphNetBlock",
     "GraphNetProcessor",
     "GlobalGraphNetProcessor",
+    "GCNBlock",
+    "GCNBlockWithEdgeFeatures",
     "TransformerBlock",
     "TransformerProcessor",
     "MultiHeadAttention",
@@ -130,7 +138,9 @@ __all__ = [
     "SeparableSpectralConv",
     "SpectralConvBase",
     "make_spectral_conv",
+    "SpectralBlockBase",
     "FNOBlock",
+    "FNOMLPBlock",
     "AFNOBlock",
     # Decoders
     "MLPDecoder",

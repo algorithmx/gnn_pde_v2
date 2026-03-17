@@ -14,6 +14,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Jump to next version..
 
+
+## [2.7.9] - 2026-03-17
+
+### Breaking Changes
+
+- **`PhysicsTokenAttention` moved from `components.transformer` to `components.attention`**:
+  - Import path changed from `from gnn_pde_v2.components.transformer import PhysicsTokenAttention`
+  - To: `from gnn_pde_v2.components.attention import PhysicsTokenAttention`
+  - All test files have been updated to use the new import path
+
+- **Temperature default changes in `PhysicsTokenAttention`**:
+  - `temperature_mode` default changed from `'fixed'` to `'learnable_scalar'`
+  - `temperature` default changed from `1.0` to `0.5`
+
+### New Features
+
+- **New `components/gcn.py` module** — DGCNN-style and GCN message passing:
+  - `EdgeConvBlock`: DGCNN-style edge convolution with max/sum/mean aggregation
+  - `GCNBlock`: Basic Graph Convolutional Network block
+  - `GCNBlockWithEdgeFeatures`: GCN variant with edge feature conditioning
+  - All blocks implement the `MessagePassingBlock` protocol
+
+- **New `core/aggregation.py` module** — Aggregation protocol and implementations:
+  - `Aggregation` protocol (runtime-checkable)
+  - `Sum`, `Mean`, `Max`, `Min` aggregation classes
+  - `get_aggregation()` factory function
+  - Full backward compatibility with string-based and callable-based aggregation
+
+- **New `SpectralBlockBase` abstract class** — `components/spectral.py`:
+  - Abstract base for FNO-style spectral blocks
+  - Defines contract: spectral branch (K) + pointwise linear (W) + optional outer residual
+
+- **New `FNOMLPBlock`** — `components/spectral.py`:
+  - Sibling of `FNOBlock` using channel MLP instead of activation
+  - Supports `channel_mlp_ratio`, `channel_mlp_dropout` parameters
+  - Implements `SpectralBlockBase` protocol
+
+- **`PhysicsTokenAttention` paper-faithful improvements** — `components/attention.py`:
+  - Added paper-faithful two-branch projection (`in_project_x`, `in_project_fx`)
+  - New parameters: `use_slice_normalization`, `use_learnable_tokens`, `qkv_mode`, `use_orthogonal_init`
+  - `qkv_mode='direct'` uses per-head Q/K/V linears (paper-faithful)
+  - `qkv_mode='multihead'` uses framework's `MultiHeadAttention` wrapper
+  - `use_orthogonal_init=True` applies orthogonal initialization to slice projection
+
+- **Non-periodic boundary padding support**:
+  - `MultiscaleFNO` now supports `_pad()` and `_unpad()` for non-periodic boundaries
+  - `GraphUNetProcessor` added padding support
+  - Supports int, tuple, and full pad format specifications
+
+### Tests Added
+
+- `TestMessagePassingBlock`: ABC contract tests
+- `TestEdgeConvBlock`: DGCNN-style edge convolution tests (9 tests)
+- `TestEdgeConditionedConvBlock`: Extended NNConv tests with all weight types
+- `TestGraphNetProcessorBlockFactory`: Custom block factory integration tests
+- `TestAggregationProtocol`: Protocol and implementation tests
+- `TestBuiltInAggregations`: Sum/Mean/Max/Min tests
+- `TestGetAggregation`: Factory function tests
+- `TestSpectralBlockBase`: Abstract base contract tests
+- `TestFNOMLPBlock`: Channel-MLP FNO variant tests (7 tests)
+
+## [2.7.8] - 2026-03-16
+
+### Added
+
+- **Examples**
+  - ``
+  - ``
+  - ``
+  - ``
+
+## [2.7.7] - 2026-03-17
+
+Application driven design evolutions. 
+
+### Breaking Changes
+- Attention and conditioning classes moved from `components.transformer` to new modules:
+  - `components.attention`: `MultiHeadAttention`, `PhysicsTokenAttention`, `QKNormMultiHeadAttention`, `SparseGraphAttention`, `RelativePositionEncoding`
+  - `components.conditioning`: `ZeroConditioning`, `AdaLNConditioning`, `DualAdaLNConditioning`, `FiLMConditioning`
+
+### New Features
+- New `components/attention.py` module with QK-normalized attention and sparse graph attention variants
+- New `components/conditioning.py` module with `AdaLNConditioningNoGate`, `DualAdaLNConditioningNoGate`, and `apply_modulation` helper
+- New `MessagePassingBlock` abstract base class for extensible message-passing blocks
+- New `EdgeConditionedConvBlock` for NNConv-style edge-conditioned convolution
+- `GraphNetProcessor` now supports custom block factories via `block_factory` parameter
+- `EncodeProcessDecode` now dispatches to `NodeDecoder` or `QueryDecoder` at runtime
+
 ## [2.7.6] - 2026-03-16
 
 ### Added

@@ -11,6 +11,14 @@ from .functional import (
     aggregate_edges,
     broadcast_nodes_to_edges,
 )
+from .aggregation import (
+    Aggregation,
+    Sum,
+    Mean,
+    Max,
+    Min,
+    get_aggregation,
+)
 from .mlp import MLP, SinActivation
 from .registry import AutoRegisterModel, MODEL_REGISTRY
 from .protocols import (
@@ -39,6 +47,13 @@ __all__ = [
     "scatter_softmax",
     "aggregate_edges",
     "broadcast_nodes_to_edges",
+    # Aggregation
+    "Aggregation",
+    "Sum",
+    "Mean",
+    "Max",
+    "Min",
+    "get_aggregation",
     "MLP",
     "SinActivation",
     "AutoRegisterModel",

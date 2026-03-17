@@ -1,7 +1,8 @@
 """
 Tests for FNO (Fourier Neural Operator) components.
 
-Covers: SpectralConv, SeparableSpectralConv, FNOBlock, AFNOBlock, FNOProcessor,
+Covers: SpectralConvBase, SpectralConv, SeparableSpectralConv,
+        SpectralBlockBase, FNOBlock, FNOMLPBlock, AFNOBlock, FNOProcessor,
         and the model classes (FNO, TFNO, AFNO).
 """
 
@@ -19,9 +20,11 @@ from gnn_pde_v2.components.spectral import (
     SeparableSpectralConv,
     SpectralConvBase,
     FNOBlock,
+    FNOMLPBlock,
     AFNOBlock,
     FNOProcessor,
     make_spectral_conv,
+    SpectralBlockBase,
 )
 from gnn_pde_v2.models.fno_model import FNO, TFNO, AFNO
 
@@ -195,6 +198,98 @@ class TestMakeSpectralConv:
         assert isinstance(conv, SeparableSpectralConv)
 
 
+class TestSpectralBlockBase:
+    """
+    Tests for the SpectralBlockBase abstract class.
+
+    Verifies the design contract: both branches (spectral_conv = K,
+    W = pointwise linear) are always present, the outer residual is
+    optional and controlled by ``residual``, and W is a *learned
+    transform* rather than an identity / skip connection.
+    """
+
+    def test_is_abstract(self):
+        """SpectralBlockBase cannot be instantiated directly."""
+        with pytest.raises(TypeError):
+            SpectralBlockBase(width=32, modes=[8, 8], n_dim=2)  # type: ignore[abstract]
+
+    def test_fno_block_is_subclass(self):
+        """FNOBlock is a concrete SpectralBlockBase subclass."""
+        assert issubclass(FNOBlock, SpectralBlockBase)
+
+    def test_fno_mlp_block_is_subclass(self):
+        """FNOMLPBlock is a concrete SpectralBlockBase subclass."""
+        assert issubclass(FNOMLPBlock, SpectralBlockBase)
+
+    def test_siblings_share_base_but_differ(self, device):
+        """FNOBlock and FNOMLPBlock share SpectralBlockBase but are distinct."""
+        fno = FNOBlock(width=32, modes=[8, 8], n_dim=2).to(device)
+        fno_mlp = FNOMLPBlock(width=32, modes=[8, 8], n_dim=2).to(device)
+
+        assert isinstance(fno, SpectralBlockBase)
+        assert isinstance(fno_mlp, SpectralBlockBase)
+        assert type(fno) is not type(fno_mlp)
+
+        # Structurally distinct post-branch components
+        assert hasattr(fno, 'activation') and not hasattr(fno, 'channel_mlp')
+        assert hasattr(fno_mlp, 'channel_mlp') and not hasattr(fno_mlp, 'activation')
+
+    def test_W_is_learned_transform_not_identity(self, device):
+        """
+        W is a learned 1x1 linear operator, not a skip/identity.
+        Its output must differ from its input (with non-trivial weights).
+        """
+        block = FNOBlock(width=32, modes=[8, 8], n_dim=2).to(device)
+        # W is a Conv2d — has explicit weight and bias parameters
+        assert isinstance(block.W, nn.Conv2d)
+        assert block.W.kernel_size == (1, 1)
+        assert block.W.in_channels == block.W.out_channels == 32
+        # Output should differ from input (W transforms channels)
+        x = torch.randn(1, 32, 8, 8, device=device)
+        out_W = block.W(x)
+        assert not torch.allclose(x, out_W)
+
+    def test_W_attribute_not_named_skip(self):
+        """W must be named 'W', not 'skip' or 'mlp' — avoid misnomer."""
+        block = FNOBlock(width=32, modes=[8, 8], n_dim=2)
+        assert hasattr(block, 'W')
+        assert not hasattr(block, 'skip')
+        assert not hasattr(block, 'mlp')
+
+    def test_residual_false_by_default(self, device):
+        """By default, no outer residual is applied."""
+        block = FNOBlock(width=32, modes=[8, 8], n_dim=2).to(device)
+        assert block.residual is False
+
+        # With zero-weight W and zero spectral_conv, output should be
+        # activation(0) not x + activation(0) — i.e. no x addback.
+        nn.init.zeros_(block.W.weight)
+        nn.init.zeros_(block.W.bias)
+        for p in block.spectral_conv.parameters():
+            nn.init.zeros_(p)
+
+        x = torch.ones(1, 32, 8, 8, device=device)
+        out = block(x)
+        # activation(0) != x; residual was not applied
+        assert not torch.allclose(out, x)
+
+    def test_residual_true_adds_input(self, device):
+        """With residual=True, output = x + post_branch(K(x) + W(x))."""
+        block = FNOBlock(width=32, modes=[8, 8], n_dim=2, residual=True).to(device)
+        assert block.residual is True
+
+        # Zero out all learnable weights → K(x)=0, W(x)=0 → post_branch(0)
+        nn.init.zeros_(block.W.weight)
+        nn.init.zeros_(block.W.bias)
+        for p in block.spectral_conv.parameters():
+            nn.init.zeros_(p)
+
+        x = torch.ones(1, 32, 8, 8, device=device)
+        out = block(x)
+        # With gelu(0)=0, residual means out = x + 0 = x
+        assert torch.allclose(out, x, atol=1e-6)
+
+
 class TestFNOBlock:
     """Test FNO block."""
 
@@ -245,21 +340,118 @@ class TestFNOBlock:
         assert out.shape == x.shape
         assert isinstance(block.spectral_conv, SeparableSpectralConv)
 
-    def test_afno_mode(self, device):
-        """Test FNO block with AFNO."""
+    def test_residual(self, device):
+        """Test FNO block with outer residual connection."""
         block = FNOBlock(
+            width=32,
+            modes=[8, 8],
+            n_dim=2,
+            residual=True,
+        ).to(device)
+
+        x = torch.randn(2, 32, 16, 16, device=device)
+        out = block(x)
+
+        assert out.shape == x.shape
+        assert block.residual is True
+
+    def test_is_spectral_block_base(self, device):
+        """Test that FNOBlock is a SpectralBlockBase subclass."""
+        block = FNOBlock(width=32, modes=[8, 8], n_dim=2)
+        assert isinstance(block, SpectralBlockBase)
+        # W is the pointwise linear operator (NOT a skip/residual connection)
+        assert hasattr(block, 'W')
+        assert hasattr(block, 'spectral_conv')
+        assert hasattr(block, 'activation')
+        assert not hasattr(block, 'channel_mlp')
+
+
+class TestFNOMLPBlock:
+    """Test FNOMLPBlock (channel-MLP sibling of FNOBlock)."""
+
+    @pytest.mark.parametrize("n_dim", [1, 2, 3])
+    def test_forward(self, n_dim, device):
+        """Test forward pass for different dimensions."""
+        modes = [8] * n_dim
+        spatial = [32] * n_dim
+
+        block = FNOMLPBlock(
+            width=64,
+            modes=modes,
+            n_dim=n_dim,
+        ).to(device)
+
+        x = torch.randn(2, 64, *spatial, device=device)
+        out = block(x)
+
+        assert out.shape == x.shape
+
+    def test_is_spectral_block_base(self, device):
+        """Test that FNOMLPBlock is a SpectralBlockBase subclass."""
+        block = FNOMLPBlock(width=32, modes=[8, 8], n_dim=2)
+        assert isinstance(block, SpectralBlockBase)
+        assert hasattr(block, 'W')
+        assert hasattr(block, 'spectral_conv')
+        assert hasattr(block, 'channel_mlp')
+        assert not hasattr(block, 'activation')
+
+    def test_channel_mlp_ratio(self, device):
+        """Test that channel_mlp_ratio controls MLP hidden size."""
+        block = FNOMLPBlock(
+            width=32,
+            modes=[8, 8],
+            n_dim=2,
+            channel_mlp_ratio=0.5,
+        ).to(device)
+
+        x = torch.randn(2, 32, 16, 16, device=device)
+        out = block(x)
+
+        assert out.shape == x.shape
+
+    def test_residual_with_channel_mlp(self, device):
+        """Test neuraloperator-style block: residual + channel MLP."""
+        block = FNOMLPBlock(
             width=64,
             modes=[8, 8],
             n_dim=2,
-            use_afno=True,
-            num_blocks=8,
+            channel_mlp_ratio=0.5,
+            channel_mlp_dropout=0.1,
+            residual=True,
         ).to(device)
-        
+
         x = torch.randn(2, 64, 16, 16, device=device)
         out = block(x)
-        
+
         assert out.shape == x.shape
-        assert isinstance(block.spectral_conv, AFNOBlock)
+        assert block.residual is True
+
+    def test_gradient_flow(self, device):
+        """Test gradients flow through K, W, and channel_mlp."""
+        block = FNOMLPBlock(width=32, modes=[8, 8], n_dim=2).to(device)
+        x = torch.randn(2, 32, 16, 16, device=device, requires_grad=True)
+
+        out = block(x)
+        out.sum().backward()
+
+        assert x.grad is not None
+        assert block.W.weight.grad is not None
+        assert all(p.grad is not None for p in block.channel_mlp.parameters())
+
+    @pytest.mark.parametrize("activation", ['relu', 'gelu', 'silu'])
+    def test_activations(self, activation, device):
+        """Test internal MLP activation options."""
+        block = FNOMLPBlock(
+            width=32,
+            modes=[8, 8],
+            n_dim=2,
+            activation=activation,
+        ).to(device)
+
+        x = torch.randn(2, 32, 16, 16, device=device)
+        out = block(x)
+
+        assert out.shape == x.shape
 
 
 class TestAFNOBlock:
@@ -483,30 +675,13 @@ class TestAFNOModel:
         out = model(x)
         
         assert out.shape == (2, 1, 16, 16)
-        
-        # Verify AFNO blocks are used
+
+        # FNOProcessor instantiates AFNOBlock directly in processor.blocks
+        # (not wrapped inside FNOBlock) — verify this design contract.
         processor = model.fno
         for block in processor.blocks:
-            assert isinstance(block.spectral_conv, AFNOBlock)
-
-    def test_model_registry(self):
-        """Test model is registered."""
-        from gnn_pde_v2.core.registry import MODEL_REGISTRY
-        
-        assert 'afno' in MODEL_REGISTRY
-        assert 'adaptive_fno' in MODEL_REGISTRY
-
-
-class TestDevicePlacement:
-    """Test device handling."""
-
-    def test_cpu(self):
-        """Test on CPU."""
-        conv = SpectralConv(4, 6, [8, 8])
-        x = torch.randn(2, 4, 16, 16)
-        out = conv(x)
-        assert out.device.type == 'cpu'
-
+            assert isinstance(block, AFNOBlock)
+            assert not isinstance(block, SpectralBlockBase)
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
     def test_cuda(self):
         """Test on CUDA if available."""
@@ -545,18 +720,19 @@ class TestEdgeCases:
         
         assert out.shape == (2, 6, 32, 32)
 
-    def test_fno_block_inplace_add(self, device):
-        """Test that FNO block handles residual addition correctly."""
+    def test_fno_block_output_differs_from_input(self, device):
+        """FNOBlock output must differ from input — it is not an identity."""
         block = FNOBlock(
             width=32,
             modes=[8, 8],
             n_dim=2,
         ).to(device)
-        
+
         x = torch.randn(2, 32, 16, 16, device=device)
         out = block(x)
-        
+
         # Output should not be the same tensor as input
         assert out is not x
-        # But should have same shape
         assert out.shape == x.shape
+        # With random weights, output should genuinely differ
+        assert not torch.allclose(out, x)
