@@ -10,6 +10,7 @@ import torch.nn as nn
 from ..core.graph import GraphsTuple, batch_graphs
 from ..core.functional import scatter_sum, scatter_mean
 from ..core.mlp import MLP
+from .processors import MessagePassingBlock
 
 
 class ProbeDecoder(nn.Module):
@@ -320,15 +321,15 @@ class ProbeDecoder(nn.Module):
         )
 
 
-class ProbeMessagePassingLayer(nn.Module):
+class ProbeMessagePassingLayer(MessagePassingBlock):
     """
     Single message passing layer for probe graph.
-    
-    Performs one step of message passing from source nodes to probe nodes:
-    1. Update edges based on sender/receiver nodes and current edge features
-    2. Aggregate messages to receiver (probe) nodes
-    3. Update node features
-    
+
+    Performs one step of message passing from source nodes to probe nodes.
+    Inherits the template method from :class:`MessagePassingBlock`.
+    A residual connection is applied in :meth:`forward` to preserve the
+    original probe-decoder semantics.
+
     Args:
         latent_dim: Dimension for node features
         edge_dim: Dimension for edge features
@@ -343,9 +344,8 @@ class ProbeMessagePassingLayer(nn.Module):
         hidden_dim: int,
         activation: str = 'gelu',
     ):
-        super().__init__()
+        super().__init__(latent_dim=latent_dim)  # default sum aggregation
 
-        self.latent_dim = latent_dim
         self.edge_dim = edge_dim
 
         # Edge update: [sender_node, receiver_node, edge] -> new_edge
@@ -363,33 +363,23 @@ class ProbeMessagePassingLayer(nn.Module):
             hidden_dims=[hidden_dim],
             activation=activation,
         )
-    
-    def forward(self, graph: GraphsTuple) -> GraphsTuple:
-        """
-        One message passing step.
-        
-        Args:
-            graph: Input GraphsTuple with nodes, edges, senders, receivers
-            
-        Returns:
-            Updated GraphsTuple with new node and edge features (with residual)
-        """
+
+    def compute_messages(self, graph):
         nodes = graph.nodes
-        edges = graph.edges
-        receivers = graph.receivers
-        senders = graph.senders
-        
-        # Edge update
-        sender_features = nodes[senders]
-        receiver_features = nodes[receivers]
-        edge_inputs = torch.cat([sender_features, receiver_features, edges], dim=-1)
+        edge_inputs = torch.cat(
+            [nodes[graph.senders], nodes[graph.receivers], graph.edges], dim=-1
+        )
         new_edges = self.edge_mlp(edge_inputs)
-        
-        # Node update (aggregate to receivers)
-        aggregated = scatter_sum(new_edges, receivers, dim=0, dim_size=nodes.shape[0])
-        
+        return new_edges, new_edges
+
+    def update_nodes(self, nodes, aggregated, graph):
         node_inputs = torch.cat([nodes, aggregated], dim=-1)
-        new_nodes = self.node_mlp(node_inputs)
-        
-        # Residual connection
-        return graph.replace(nodes=nodes + new_nodes, edges=edges + new_edges)
+        return self.node_mlp(node_inputs)
+
+    def forward(self, graph: GraphsTuple) -> GraphsTuple:
+        """Message passing step with residual connection."""
+        out = super().forward(graph)
+        return graph.replace(
+            nodes=graph.nodes + out.nodes,
+            edges=graph.edges + out.edges,
+        )

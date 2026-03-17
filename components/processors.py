@@ -1,25 +1,23 @@
 """
-GraphNet processors: DeepMind-style message passing.
+GraphNet processors: DeepMind-style and edge-conditioned message passing.
 
-Two independent block classes reflect the two distinct use cases:
+Two independent block families reflect distinct use cases:
 
-- ``GraphNetBlock`` / ``GraphNetProcessor``:
-    Node/edge-only message passing.  Use when all conditioning (PDE
-    parameters, time, BCs) has already been encoded into per-node or
-    per-edge features.
+- ``MessagePassingBlock`` subclasses (``GraphNetBlock``,
+  ``EdgeConditionedConvBlock``):
+    Node/edge message passing without explicit globals.
 
 - ``GlobalGraphNetBlock`` / ``GlobalGraphNetProcessor``:
     Full DeepMind Graph Nets block with globals as a first-class
-    participant.  Use when system-level state (Reynolds number, viscosity,
-    simulation time, boundary-condition summary, …) must flow through a
-    dedicated global channel rather than being copied into every node.
+    participant.
 
-The two families are independent siblings; they are NOT related by
-inheritance.  Both satisfy the ``GraphProcessor`` structural protocol
-defined in ``core.protocols``.
+``GlobalGraphNetBlock`` is intentionally not derived from
+``MessagePassingBlock`` because it performs a 3-step update
+(edge → node → global) rather than the base 2-step template.
 """
 
-from typing import Callable, Optional
+from abc import ABC, abstractmethod
+from typing import Callable, Literal, Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -31,10 +29,79 @@ from ..core.mlp import MLP
 
 
 # ---------------------------------------------------------------------------
-# Node/edge-only block
+# Node/edge-only blocks
 # ---------------------------------------------------------------------------
+class MessagePassingBlock(ABC, nn.Module):
+    """
+    Abstract base class for single-step graph message-passing blocks.
 
-class GraphNetBlock(nn.Module):
+    Template method:
+    1) ``compute_messages`` on edges
+    2) aggregate edge messages to receiver nodes
+    3) ``update_nodes`` from current nodes + aggregated messages
+    """
+
+    # Whether this block produces updated edge features.
+    updates_edges: bool = True
+
+    def __init__(
+        self,
+        latent_dim: int,
+        aggregate: Literal['sum', 'mean', 'max', 'min'] = 'sum',
+        aggregate_fn: Optional[Callable] = None,
+    ):
+        super().__init__()
+        self.latent_dim = latent_dim
+        self._aggregate_method = aggregate
+        self._aggregate_fn = aggregate_fn
+
+    def _aggregate(
+        self,
+        messages: torch.Tensor,
+        receivers: torch.Tensor,
+        num_nodes: int,
+    ) -> torch.Tensor:
+        if self._aggregate_fn is not None:
+            return self._aggregate_fn(messages, receivers, num_nodes)
+        return aggregate_edges(
+            messages,
+            receivers,
+            num_nodes,
+            method=self._aggregate_method,
+        )
+
+    @abstractmethod
+    def compute_messages(
+        self,
+        graph: GraphsTuple,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        """
+        Returns:
+            messages: [E, msg_dim]
+            new_edges: [E, edge_dim] or None to keep current edges
+        """
+        ...
+
+    @abstractmethod
+    def update_nodes(
+        self,
+        nodes: torch.Tensor,
+        aggregated: torch.Tensor,
+        graph: GraphsTuple,
+    ) -> torch.Tensor:
+        ...
+
+    def forward(self, graph: GraphsTuple) -> GraphsTuple:
+        messages, new_edges = self.compute_messages(graph)
+        aggregated = self._aggregate(messages, graph.receivers, graph.nodes.shape[0])
+        new_nodes = self.update_nodes(graph.nodes, aggregated, graph)
+        return graph.replace(
+            nodes=new_nodes,
+            edges=new_edges if new_edges is not None else graph.edges,
+        )
+
+
+class GraphNetBlock(MessagePassingBlock):
     """
     Single node/edge message-passing step (no globals).
 
@@ -74,10 +141,11 @@ class GraphNetBlock(nn.Module):
         activation: str = 'gelu',
         aggregate_fn: Optional[Callable] = None,
     ):
-        super().__init__()
-
-        self.latent_dim = latent_dim
-        self.aggregate_fn: Callable = aggregate_fn if aggregate_fn is not None else aggregate_edges
+        super().__init__(
+            latent_dim=latent_dim,
+            aggregate='sum',
+            aggregate_fn=aggregate_fn,
+        )
 
         # Edge update: [sender_node, receiver_node, edge] → new_edge
         self.edge_mlp = MLP(
@@ -95,35 +163,130 @@ class GraphNetBlock(nn.Module):
             activation=activation,
         )
 
-    def forward(self, graph: GraphsTuple) -> GraphsTuple:
-        """
-        Single node/edge message-passing step.
-
-        Args:
-            graph: Input :class:`~gnn_pde_v2.core.GraphsTuple`.
-                ``nodes`` and ``edges`` must not be ``None``.
-
-        Returns:
-            Updated :class:`~gnn_pde_v2.core.GraphsTuple` with new node
-            and edge features.  ``globals`` is passed through unchanged.
-        """
+    def compute_messages(
+        self,
+        graph: GraphsTuple,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         nodes = graph.nodes
-        edges = graph.edges
         senders = graph.senders
         receivers = graph.receivers
 
         # --- Edge update ---
         edge_inputs = torch.cat(
-            [nodes[senders], nodes[receivers], edges], dim=-1
+            [nodes[senders], nodes[receivers], graph.edges], dim=-1
         )
         new_edges = self.edge_mlp(edge_inputs)
+        return new_edges, new_edges
 
-        # --- Node update ---
-        agg = self.aggregate_fn(new_edges, receivers, nodes.shape[0])
-        node_inputs = torch.cat([nodes, agg], dim=-1)
-        new_nodes = self.node_mlp(node_inputs)
+    def update_nodes(
+        self,
+        nodes: torch.Tensor,
+        aggregated: torch.Tensor,
+        graph: GraphsTuple,
+    ) -> torch.Tensor:
+        node_inputs = torch.cat([nodes, aggregated], dim=-1)
+        return self.node_mlp(node_inputs)
 
-        return graph.replace(nodes=new_nodes, edges=new_edges)
+
+class EdgeConditionedConvBlock(MessagePassingBlock):
+    """
+    Edge-conditioned convolution block (NNConv-style).
+
+    Supports kernel generation modes:
+    - 'full': per-edge full [H, H] matrix
+    - 'vector': per-edge [H] diagonal gating
+    - 'scalar': per-edge [1] scalar gating
+    """
+
+    updates_edges = False
+
+    def __init__(
+        self,
+        latent_dim: int,
+        edge_latent_dim: int,
+        hidden_dim: int = 128,
+        edge_weight_type: str = 'full',
+        aggregate: str = 'sum',
+        aggregate_fn: Optional[Callable] = None,
+        root_weight: bool = True,
+        bias: bool = True,
+        activation: str = 'relu',
+    ):
+        super().__init__(
+            latent_dim=latent_dim,
+            aggregate=aggregate,
+            aggregate_fn=aggregate_fn,
+        )
+
+        if edge_weight_type == 'full':
+            out_dim = latent_dim * latent_dim
+        elif edge_weight_type == 'vector':
+            out_dim = latent_dim
+        elif edge_weight_type == 'scalar':
+            out_dim = 1
+        else:
+            raise ValueError(f"Unknown edge_weight_type: {edge_weight_type}")
+
+        self.edge_weight_type = edge_weight_type
+        self.edge_weight_net = MLP(
+            in_dim=edge_latent_dim,
+            out_dim=out_dim,
+            hidden_dims=[hidden_dim],
+            activation=activation,
+            use_layer_norm=False,
+        )
+
+        if root_weight:
+            self.root = nn.Parameter(torch.empty(latent_dim, latent_dim))
+        else:
+            self.register_parameter('root', None)
+
+        if bias:
+            self.bias = nn.Parameter(torch.empty(latent_dim))
+        else:
+            self.register_parameter('bias', None)
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        for m in self.edge_weight_net.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.xavier_uniform_(m.weight)
+                if m.bias is not None:
+                    nn.init.zeros_(m.bias)
+        if self.root is not None:
+            nn.init.xavier_uniform_(self.root)
+        if self.bias is not None:
+            nn.init.zeros_(self.bias)
+
+    def compute_messages(
+        self,
+        graph: GraphsTuple,
+    ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        H = self.latent_dim
+        src_x = graph.nodes[graph.senders]  # [E, H]
+
+        w = self.edge_weight_net(graph.edges)
+        if self.edge_weight_type == 'full':
+            W = w.view(-1, H, H)
+            msg = torch.bmm(src_x.unsqueeze(1), W).squeeze(1)  # [E, H]
+        else:
+            msg = src_x * w  # [E, H]
+
+        return msg, None  # Keep edges unchanged
+
+    def update_nodes(
+        self,
+        nodes: torch.Tensor,
+        aggregated: torch.Tensor,
+        graph: GraphsTuple,
+    ) -> torch.Tensor:
+        out = aggregated
+        if self.root is not None:
+            out = out + nodes @ self.root
+        if self.bias is not None:
+            out = out + self.bias
+        return out
 
 
 # ---------------------------------------------------------------------------
@@ -305,20 +468,25 @@ class GraphNetProcessor(nn.Module):
         residual: bool = True,
         aggregate_fn: Optional[Callable] = None,
         use_checkpoint: bool = False,
+        block_factory: Optional[Callable[[], nn.Module]] = None,
     ):
         super().__init__()
 
         self.residual = residual
         self.use_checkpoint = use_checkpoint
-        self.blocks = nn.ModuleList([
-            GraphNetBlock(
-                latent_dim=latent_dim,
-                hidden_dim=hidden_dim,
-                activation=activation,
-                aggregate_fn=aggregate_fn,
-            )
-            for _ in range(n_layers)
-        ])
+
+        if block_factory is not None:
+            self.blocks = nn.ModuleList([block_factory() for _ in range(n_layers)])
+        else:
+            self.blocks = nn.ModuleList([
+                GraphNetBlock(
+                    latent_dim=latent_dim,
+                    hidden_dim=hidden_dim,
+                    activation=activation,
+                    aggregate_fn=aggregate_fn,
+                )
+                for _ in range(n_layers)
+            ])
 
         # Pre-norm layers for numerical stability in deep networks
         if self.residual:
@@ -331,7 +499,7 @@ class GraphNetProcessor(nn.Module):
 
     def forward(self, graph: GraphsTuple) -> GraphsTuple:
         """
-        Process graph through all :class:`GraphNetBlock` layers.
+        Process graph through all message-passing layers.
 
         Args:
             graph: Input :class:`~gnn_pde_v2.core.GraphsTuple`.
@@ -341,10 +509,17 @@ class GraphNetProcessor(nn.Module):
         """
         for i, block in enumerate(self.blocks):
             if self.residual:
-                nn_, en_ = self.node_norms[i], self.edge_norms[i]
-                def _step(nodes, edges, _b=block, _g=graph, _nn=nn_, _en=en_):
-                    out = _b(_g.replace(nodes=_nn(nodes), edges=_en(edges)))
-                    return nodes + out.nodes, edges + out.edges
+                nn_ = self.node_norms[i]
+                en_ = self.edge_norms[i]
+                _ue = getattr(block, 'updates_edges', True)
+                def _step(nodes, edges,
+                          _b=block, _g=graph, _nn=nn_, _en=en_,
+                          _updates_edges=_ue):
+                    normed_edges = _en(edges) if _updates_edges else edges
+                    out = _b(_g.replace(nodes=_nn(nodes), edges=normed_edges))
+                    new_nodes = nodes + out.nodes
+                    new_edges = (edges + out.edges) if _updates_edges else edges
+                    return new_nodes, new_edges
             else:
                 def _step(nodes, edges, _b=block, _g=graph):
                     out = _b(_g.replace(nodes=nodes, edges=edges))

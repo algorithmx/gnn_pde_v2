@@ -8,7 +8,7 @@ from typing import Optional
 import torch
 from ..core.graph import GraphsTuple
 from ..core.base import BaseModel
-from ..core.protocols import GraphEncoder, GraphProcessor, Decoder
+from ..core.protocols import GraphEncoder, GraphProcessor, Decoder, NodeDecoder, QueryDecoder
 
 
 class EncodeProcessDecode(BaseModel):
@@ -31,8 +31,11 @@ class EncodeProcessDecode(BaseModel):
         processor: Graph processor satisfying
             :class:`~gnn_pde_v2.core.GraphProcessor` protocol; maps
             ``GraphsTuple → GraphsTuple``.
-        decoder: Decoder satisfying :class:`~gnn_pde_v2.core.Decoder` protocol;
-            maps ``(GraphsTuple, Optional[Tensor]) → Tensor``.
+        decoder: Decoder satisfying either :class:`~gnn_pde_v2.core.NodeDecoder`
+            (``GraphsTuple → Tensor``) or :class:`~gnn_pde_v2.core.QueryDecoder`
+            (``(GraphsTuple, Tensor) → Tensor``).  ``EncodeProcessDecode``
+            dispatches at runtime: ``query_positions`` is forwarded only when
+            the decoder satisfies ``QueryDecoder``.
     """
     
     def __init__(
@@ -68,8 +71,12 @@ class EncodeProcessDecode(BaseModel):
         # Process
         processed = self.processor(latent)
         
-        # Decode
-        output = self.decoder(processed, query_positions)
+        # Decode — dispatch on decoder kind so that NodeDecoder implementations
+        # are never called with the query_positions argument they don't accept.
+        if isinstance(self.decoder, QueryDecoder):
+            output = self.decoder(processed, query_positions)
+        else:
+            output = self.decoder(processed)
         
         return output
     

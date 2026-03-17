@@ -49,15 +49,26 @@ from .layers import (
     make_residual,
 )
 from .processors import (
+    MessagePassingBlock,
     GraphNetBlock, GraphNetProcessor,
+    EdgeConditionedConvBlock,
     GlobalGraphNetBlock, GlobalGraphNetProcessor,
 )
 from .decoders import MLPDecoder, IndependentMLPDecoder
 from .probe import ProbeDecoder, ProbeMessagePassingLayer
 from .transformer import (
-    TransformerBlock, TransformerProcessor, MultiHeadAttention, PhysicsTokenAttention,
-    RelativePositionEncoding,
-    ZeroConditioning, AdaLNConditioning, DualAdaLNConditioning, FiLMConditioning,
+    TransformerBlock, TransformerProcessor,
+)
+from .attention import (
+    MultiHeadAttention, PhysicsTokenAttention,
+    QKNormMultiHeadAttention, SparseGraphAttention, RelativePositionEncoding,
+)
+from .conditioning import (
+    ZeroConditioning,
+    AdaLNConditioning, AdaLNConditioningNoGate,
+    DualAdaLNConditioning, DualAdaLNConditioningNoGate,
+    FiLMConditioning,
+    apply_modulation,
 )
 from .temperature import (
     TemperatureBase,
@@ -93,7 +104,9 @@ __all__ = [
     "GatedResidual",
     "make_residual",
     # Processors
+    "MessagePassingBlock",
     "GraphNetBlock",
+    "EdgeConditionedConvBlock",
     "GlobalGraphNetBlock",
     "GraphNetProcessor",
     "GlobalGraphNetProcessor",
@@ -101,6 +114,8 @@ __all__ = [
     "TransformerProcessor",
     "MultiHeadAttention",
     "PhysicsTokenAttention",
+    "QKNormMultiHeadAttention",
+    "SparseGraphAttention",
     "RelativePositionEncoding",
     # Temperature mechanisms
     "TemperatureBase",
@@ -125,8 +140,11 @@ __all__ = [
     # Conditioning (Modulation & ConditioningProtocol live in gnn_pde_v2.core.protocols)
     "ZeroConditioning",
     "AdaLNConditioning",
+    "AdaLNConditioningNoGate",
+    "DualAdaLNConditioningNoGate",
     "DualAdaLNConditioning",
     "FiLMConditioning",
+    "apply_modulation",
     # Structural protocols
     "GraphEncoder",
     "GraphProcessor",
