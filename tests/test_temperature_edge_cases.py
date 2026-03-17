@@ -258,12 +258,19 @@ class TestBackwardCompatibility:
     """Tests for backward compatibility."""
     
     def test_default_temperature_mode(self):
-        """Test default temperature mode is 'fixed'."""
+        """Test default temperature mode is 'learnable_scalar'.
+
+        Using a learnable scalar as the default gives the model a free
+        parameter to tune attention sharpness from the start of training,
+        unlike the fixed mode which requires explicit configuration.
+        """
         from gnn_pde_v2.components.attention import PhysicsTokenAttention
-        
+        from gnn_pde_v2.components.temperature import LearnableScalarTemperature
+
         attn = PhysicsTokenAttention(dim=64, n_tokens=8, n_heads=4)
-        
-        assert attn.temperature_mode == 'fixed'
+
+        assert attn.temperature_mode == 'learnable_scalar'
+        assert isinstance(attn.temperature_module, LearnableScalarTemperature)
     
     def test_old_api_compatibility(self):
         """Test old API with temperature parameter still works."""

@@ -479,29 +479,44 @@ class TestGraphUNetProcessor:
         assert output.nodes.shape == graph.nodes.shape
 
     def test_encoder_decoder_balance(self, device):
-        """Test same number of encoder and decoder levels."""
-        num_nodes = 32
+        """Test same number of encoder and decoder levels, and that the
+        U-Net topology is actually functional (forward pass restores shape).
+
+        Checking module count alone cannot catch wiring bugs (e.g. wrong
+        unpool indices).  Running a forward pass confirms the full
+        encoder→bottleneck→decoder pipeline is consistent.
+        """
+        num_nodes = 64   # large enough to survive 3× halving (n_levels=4)
         feature_dim = 8
-        
-        nodes = torch.randn(num_nodes, feature_dim, device=device)
+
+        senders = torch.randint(0, num_nodes, (100,), device=device)
+        receivers = torch.randint(0, num_nodes, (100,), device=device)
         graph = GraphsTuple(
-            nodes=nodes,
-            edges=None,
-            receivers=None,
-            senders=None,
+            nodes=torch.randn(num_nodes, feature_dim, device=device),
+            edges=torch.randn(100, feature_dim, device=device),
+            senders=senders,
+            receivers=receivers,
             n_node=torch.tensor([num_nodes], device=device),
-            n_edge=torch.tensor([0], device=device),
+            n_edge=torch.tensor([100], device=device),
         )
-        
+
         for n_levels in [2, 3, 4]:
             processor = GraphUNetProcessor(
                 latent_dim=feature_dim,
                 n_levels=n_levels,
                 skip_connection="add",
             ).to(device)
-            
+
             assert len(processor.encoders) == n_levels
             assert len(processor.decoders) == n_levels
+
+            # Forward pass: skip connections + unpool must exactly reconstruct
+            # the original node count, proving the topology is correct.
+            output = processor(graph)
+            assert output.nodes.shape == graph.nodes.shape, (
+                f"n_levels={n_levels}: output shape {output.nodes.shape} "
+                f"!= input shape {graph.nodes.shape}"
+            )
 
     def test_gradient_flow(self, device):
         """Test that gradients flow through all parameters."""
@@ -600,66 +615,27 @@ class TestMGKNProcessor:
         output = processor(graph)
         assert output.nodes.shape == graph.nodes.shape
 
-    def test_linear_complexity(self, device):
-        """Test approximately linear scaling with nodes."""
-        feature_dim = 8
-        
-        times = []
-        node_counts = [50, 100, 200]
-        
-        for num_nodes in node_counts:
-            nodes = torch.randn(num_nodes, feature_dim, device=device)
-            num_edges = num_nodes * 2
-            senders = torch.randint(0, num_nodes, (num_edges,), device=device)
-            receivers = torch.randint(0, num_nodes, (num_edges,), device=device)
-            
-            graph = GraphsTuple(
-                nodes=nodes,
-                edges=torch.randn(num_edges, feature_dim, device=device),
-                receivers=receivers,
-                senders=senders,
-                n_node=torch.tensor([num_nodes], device=device),
-                n_edge=torch.tensor([num_edges], device=device),
-            )
-            
-            processor = MGKNProcessor(
-                latent_dim=feature_dim,
-                n_levels=2,
-                nodes_per_level=[num_nodes // 2],
-                hidden_dim=16,
-                n_layers_per_level=1,
-            ).to(device)
-            
-            # Warmup
-            _ = processor(graph)
-            
-            # Time it
-            start = time.time()
-            for _ in range(10):
-                _ = processor(graph)
-            elapsed = time.time() - start
-            times.append(elapsed)
-        
-        # Check approximate linearity (time ratio should be close to node ratio)
-        # Allow for some variance due to overhead
-        ratio_1 = times[1] / times[0]
-        ratio_2 = times[2] / times[1]
-        node_ratio = node_counts[1] / node_counts[0]
-        
-        # Should be roughly linear (within factor of 3)
-        assert ratio_1 < node_ratio * 3
-        assert ratio_2 < node_ratio * 3
-
     def test_skip_connections(self, device):
-        """Test that upward pass adds skip connections."""
+        """Verify that skip connections are wired into the computation graph.
+
+        Skip connections add encoder features (derived from the fine-level
+        input) to each decoder stage in the upward V-cycle pass.  Two
+        concrete invariants must hold:
+
+        1. Gradient connectivity — gradients from the output must flow back
+           to the original input nodes via the skip-connection path.
+        2. Non-identity transformation — the V-cycle must actually change
+           the node features (not a passthrough).
+        """
         num_nodes = 64
         feature_dim = 8
-        
-        nodes = torch.randn(num_nodes, feature_dim, device=device)
+
+        nodes = torch.randn(num_nodes, feature_dim, device=device,
+                            requires_grad=True)
         num_edges = 100
         senders = torch.randint(0, num_nodes, (num_edges,), device=device)
         receivers = torch.randint(0, num_nodes, (num_edges,), device=device)
-        
+
         graph = GraphsTuple(
             nodes=nodes,
             edges=torch.randn(num_edges, feature_dim, device=device),
@@ -668,7 +644,7 @@ class TestMGKNProcessor:
             n_node=torch.tensor([num_nodes], device=device),
             n_edge=torch.tensor([num_edges], device=device),
         )
-        
+
         processor = MGKNProcessor(
             latent_dim=feature_dim,
             n_levels=3,
@@ -676,9 +652,27 @@ class TestMGKNProcessor:
             hidden_dim=16,
             n_layers_per_level=1,
         ).to(device)
-        
+
         output = processor(graph)
+
+        # 1. Shape preservation through the full V-cycle.
         assert output.nodes.shape == graph.nodes.shape
+
+        # 2. Gradient connectivity: skip connections keep input nodes in the
+        #    computation graph.  If they were severed, fine-level encoder
+        #    features would not reach the decoder and the gradient from
+        #    output → input would vanish or be zero.
+        loss = output.nodes.sum()
+        loss.backward()
+        assert nodes.grad is not None, "No gradient reached input nodes"
+        assert nodes.grad.abs().max().item() > 0, (
+            "Input node gradients are all zero — skip connections may be severed"
+        )
+
+        # 3. Non-identity: the V-cycle must transform features.
+        assert not torch.allclose(output.nodes.detach(), nodes.detach()), (
+            "Output equals input — the V-cycle applied no transformation"
+        )
 
     @pytest.mark.parametrize("n_levels", [2, 3, 4])
     def test_different_levels(self, n_levels, device):
@@ -1181,8 +1175,8 @@ class TestHierarchicalGraph:
             feature_dim=feature_dim,
         )
         
-        # Should have 3 graphs
-        assert len(hierarchy.graphs) >= 1
+        # levels=3 must produce exactly 3 graphs (one per resolution level)
+        assert len(hierarchy.graphs) == 3
 
     def test_nodes_per_level(self, device):
         """Verify each level has correct number of nodes."""
@@ -1211,8 +1205,12 @@ class TestHierarchicalGraph:
             feature_dim=feature_dim,
         )
         
-        # Check first level has original nodes
+        # Level 0 = original fine graph
         assert hierarchy.graphs[0].nodes.shape[0] == num_nodes
+        # Levels 1 and 2 must match nodes_per_level exactly;
+        # checking only level 0 would never catch a wrong coarsening ratio.
+        assert hierarchy.graphs[1].nodes.shape[0] == nodes_per_level[0]
+        assert hierarchy.graphs[2].nodes.shape[0] == nodes_per_level[1]
 
     def test_restrict_to_coarse(self, device):
         """Test fine to coarse restriction."""

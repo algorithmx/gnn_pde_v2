@@ -22,6 +22,31 @@ class SinActivation(nn.Module):
         return torch.sin(x)
 
 
+class _InstanceNorm1dAdapter(nn.Module):
+    """Wraps InstanceNorm1d to handle (N, C) input from standard MLPs.
+
+    PyTorch's InstanceNorm1d expects (N, C, L) input; a plain 2-D tensor
+    (N, C) is misinterpreted as (C, L), and unsqueezing to (N, C, 1) still
+    fails in training because InstanceNorm1d requires L > 1.
+
+    For 2-D inputs we use LayerNorm instead, which has the same per-sample
+    normalization semantics and no spatial-length restriction.  For 3-D
+    inputs (N, C, L) we delegate to the real InstanceNorm1d.
+    """
+
+    def __init__(self, num_features: int, affine: bool = False, **kwargs):
+        super().__init__()
+        # 2-D path: LayerNorm normalises each sample across its C features.
+        self.layer_norm = nn.LayerNorm(num_features, elementwise_affine=affine)
+        # 3-D path: true InstanceNorm1d.
+        self.norm = nn.InstanceNorm1d(num_features, affine=affine, **kwargs)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        if x.dim() == 2:
+            return self.layer_norm(x)
+        return self.norm(x)
+
+
 class MLP(nn.Module):
     """
     Flexible feedforward network with configurable hidden/final behavior.
@@ -252,7 +277,7 @@ class MLP(nn.Module):
             mapping = {
                 'layer': nn.LayerNorm(dim),
                 'batch': nn.BatchNorm1d(dim),
-                'instance': nn.InstanceNorm1d(dim, affine=True),
+                'instance': _InstanceNorm1dAdapter(dim, affine=True),
                 'group': nn.GroupNorm(num_groups=next(g for g in range(min(8, dim), 0, -1) if dim % g == 0), num_channels=dim),
             }
             if spec not in mapping:
@@ -272,10 +297,9 @@ class MLP(nn.Module):
                 return nn.BatchNorm1d(dim, **kwargs)
             elif norm_type == 'instance':
                 kwargs = {k: v for k, v in spec.items() if k != 'type'}
-                # Ensure affine=True by default for instance norm
                 if 'affine' not in kwargs:
                     kwargs['affine'] = True
-                return nn.InstanceNorm1d(dim, **kwargs)
+                return _InstanceNorm1dAdapter(dim, **kwargs)
             elif norm_type == 'group':
                 num_groups = spec.get('num_groups', min(8, dim))
                 # Adjust num_groups to be a valid divisor of dim

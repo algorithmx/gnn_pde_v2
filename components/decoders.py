@@ -61,8 +61,9 @@ class IndependentMLPDecoder(nn.Module):
 
     Useful for multi-task settings or when outputs have different scales.
 
-    Outputs are concatenated along the feature dimension to satisfy the
-    :class:`~gnn_pde_v2.core.protocols.Decoder` protocol (returns Tensor).
+    :meth:`forward` concatenates all component outputs along the feature
+    dimension and returns a single ``[N, sum(out_dims)]`` tensor, satisfying
+    the :class:`~gnn_pde_v2.core.protocols.Decoder` protocol directly.
 
     Args:
         latent_dim: Input feature dimension
@@ -70,10 +71,6 @@ class IndependentMLPDecoder(nn.Module):
             output dimension will be ``sum(out_dims)``.
         hidden_dims: Hidden layer dimensions for each MLP
         activation: Activation function name
-
-    Note:
-        Use :meth:`forward_separate` if you need individual component outputs
-        as a list instead of concatenated tensor.
     """
 
     def __init__(
@@ -103,7 +100,11 @@ class IndependentMLPDecoder(nn.Module):
         query_positions: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """
-        Decode to concatenated output tensor.
+        Decode to a single concatenated output tensor.
+
+        Concatenates all component outputs along the feature dimension.
+        Use this to satisfy the :class:`~gnn_pde_v2.core.protocols.Decoder`
+        protocol which expects a single Tensor.
 
         Args:
             graph: Processed GraphsTuple
@@ -115,28 +116,4 @@ class IndependentMLPDecoder(nn.Module):
         if graph.nodes is None:
             raise ValueError("Graph must have nodes for IndependentMLPDecoder")
 
-        outputs = [decoder(graph.nodes) for decoder in self.decoders]
-        return torch.cat(outputs, dim=-1)
-
-    def forward_separate(
-        self,
-        graph: GraphsTuple,
-        query_positions: Optional[torch.Tensor] = None
-    ) -> List[torch.Tensor]:
-        """
-        Decode to separate output tensors (one per component).
-
-        Use this method when you need individual component outputs rather than
-        a concatenated tensor.
-
-        Args:
-            graph: Processed GraphsTuple
-            query_positions: Ignored for this decoder
-
-        Returns:
-            List of [N, out_dim_i] tensors, one per output component
-        """
-        if graph.nodes is None:
-            raise ValueError("Graph must have nodes for IndependentMLPDecoder")
-
-        return [decoder(graph.nodes) for decoder in self.decoders]
+        return torch.cat([decoder(graph.nodes) for decoder in self.decoders], dim=-1)

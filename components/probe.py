@@ -233,6 +233,7 @@ class ProbeDecoder(nn.Module):
         hidden_dim: int = 128,
         k_nearest: int = 5,
         decode_with_query_features: bool = False,
+        edge_dim: Optional[int] = None,
     ):
         super().__init__()
         self.latent_dim = latent_dim
@@ -240,13 +241,29 @@ class ProbeDecoder(nn.Module):
         self.edge_encoder = edge_encoder
         self.k_nearest = k_nearest
         self.decode_with_query_features = decode_with_query_features
-        
+
+        # Determine the effective edge feature dimension after optional encoding.
+        # ProbeGraphBuilder always produces 1-D distance edges; if an encoder is
+        # provided that has a num_kernels attribute we use that.
+        if edge_dim is None:
+            if edge_encoder is not None and hasattr(edge_encoder, 'num_kernels'):
+                edge_dim = edge_encoder.num_kernels
+            else:
+                edge_dim = 1  # raw distance scalar from ProbeGraphBuilder
+
+        # Project edges to latent_dim when they differ (required by most
+        # message-passing blocks which expect edge_dim == latent_dim).
+        if edge_dim != latent_dim:
+            self.edge_projection: Optional[nn.Linear] = nn.Linear(edge_dim, latent_dim)
+        else:
+            self.edge_projection = None
+
         # Output MLP
         decoder_in_dim = latent_dim
         if decode_with_query_features:
             # Will be set on first forward pass based on query features
             self._query_feature_dim: Optional[int] = None
-        
+
         self.output_mlp = MLP(
             in_dim=decoder_in_dim,
             out_dim=out_dim,
@@ -303,14 +320,16 @@ class ProbeDecoder(nn.Module):
         # Batch probe graphs
         batched_probe = batch_graphs(probe_graphs)
         
-        # Encode edges if encoder provided
+        # Encode edges (optional) then project to latent_dim
+        edges = batched_probe.edges
         if self.edge_encoder is not None:
-            encoded_edges = self.edge_encoder(batched_probe.edges.squeeze(-1))
-            # Flatten if needed
-            if encoded_edges.dim() > 2:
-                encoded_edges = encoded_edges.view(encoded_edges.shape[0], -1)
-            batched_probe = batched_probe.replace(edges=encoded_edges)
-        
+            edges = self.edge_encoder(edges.squeeze(-1))
+            if edges.dim() > 2:
+                edges = edges.view(edges.shape[0], -1)
+        if self.edge_projection is not None:
+            edges = self.edge_projection(edges)
+        batched_probe = batched_probe.replace(edges=edges)
+
         # Process through processor
         if isinstance(self.processor, nn.ModuleList):
             for block in self.processor:
@@ -440,7 +459,11 @@ class WindFarmGNO(nn.Module):
         if use_rbf:
             from .rbf import LearnableRBFEncoder
             self.edge_encoder = LearnableRBFEncoder(**rbf_kwargs)
-            edge_input_dim = rbf_kwargs['num_kernels']
+            # Each of the num_edge_features values is encoded independently by
+            # the RBF kernel bank, producing num_kernels values per input scalar.
+            # The resulting per-edge feature vector has dimension
+            # num_edge_features * num_kernels.
+            edge_input_dim = num_edge_features * rbf_kwargs['num_kernels']
         else:
             self.edge_encoder = None
             edge_input_dim = num_edge_features

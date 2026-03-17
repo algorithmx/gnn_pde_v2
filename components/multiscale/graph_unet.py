@@ -226,6 +226,16 @@ class GraphUNetProcessor(nn.Module):
             if i < len(indices_list):
                 original_size = original_sizes[i]
                 x = self.unpool(x, indices_list[i], original_size)
+                # Restore graph topology (edges/senders/receivers) from the
+                # pre-pool encoder graph at this level so downstream
+                # GraphNetBlock layers can compute messages.
+                skip_topo = encoder_outputs[i]
+                x = x.replace(
+                    edges=skip_topo.edges,
+                    senders=skip_topo.senders,
+                    receivers=skip_topo.receivers,
+                    n_edge=skip_topo.n_edge,
+                )
             
             # Skip connection with pre-pool encoder features (sizes now match)
             if i < len(encoder_outputs):

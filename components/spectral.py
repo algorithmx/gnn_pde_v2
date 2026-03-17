@@ -195,12 +195,18 @@ class SpectralConv(SpectralConvBase):
     def _apply_spectral_conv(self, x_ft: torch.Tensor, out_ft: torch.Tensor) -> torch.Tensor:
         """Apply standard (non-separable) spectral convolution."""
         weights_complex = torch.view_as_complex(self.weights)
-        
-        # Build slice tuple for indexing: [:, :, :modes[0], :modes[1], ...]
-        slice_idx = (slice(None), slice(None)) + tuple(slice(0, m) for m in self.modes)
-        
-        # Apply unified n-dimensional complex multiplication
-        out_ft[slice_idx] = compl_mul_nd(x_ft[slice_idx], weights_complex, self.n_dim)
+
+        # Clamp modes to the actual available frequency dimensions so that
+        # the spectral conv works even when spatial_size < modes.
+        actual_modes = tuple(
+            min(m, x_ft.shape[2 + i]) for i, m in enumerate(self.modes)
+        )
+        slice_idx = (slice(None), slice(None)) + tuple(slice(0, m) for m in actual_modes)
+        weight_slice = (slice(None), slice(None)) + tuple(slice(0, m) for m in actual_modes)
+
+        out_ft[slice_idx] = compl_mul_nd(
+            x_ft[slice_idx], weights_complex[weight_slice], self.n_dim
+        )
 
         return out_ft
 
@@ -239,22 +245,24 @@ class SeparableSpectralConv(SpectralConvBase):
         for dim_idx, weight in enumerate(self.weights):
             weights_complex = torch.view_as_complex(weight)
             mode = self.modes[dim_idx]
-            
-            # Build slice for input: slice the current dimension up to mode
-            # For dim_idx=0 in 2D: [:, :, :mode, :] -> slice all of dim 0 (H)
-            # For dim_idx=1 in 2D: [:, :, :, :mode] -> slice all of dim 1 (W)
+            # Clamp to available freq size (spatial_size may be smaller than modes)
+            actual_mode = min(mode, x_ft.shape[2 + dim_idx])
+
+            # Build slice for input: slice the current dimension up to actual_mode
             input_slices = [slice(None), slice(None)]  # batch and channels
             for d in range(self.n_dim):
                 if d == dim_idx:
-                    input_slices.append(slice(0, mode))
+                    input_slices.append(slice(0, actual_mode))
                 else:
                     input_slices.append(slice(None))
-            
+
             # Build slice for output (same pattern)
             output_slices = tuple(input_slices)
-            
+
             # Extract input slice
             slice_in = x_ft[output_slices]
+            # Also slice weight along its mode dimension (dim 2)
+            weight_sliced = weights_complex[:, :, :actual_mode]
             
             # Build einsum string for this dimension
             # Pattern: contract along the current dimension only
@@ -268,7 +276,7 @@ class SeparableSpectralConv(SpectralConvBase):
             einsum_str = f"bi{spatial_letters},io{current_letter}->bo{spatial_letters}"
             
             # Apply einsum - this contracts along the current dimension
-            out_contribution = torch.einsum(einsum_str, slice_in, weights_complex)
+            out_contribution = torch.einsum(einsum_str, slice_in, weight_sliced)
             
             # Accumulate into output
             out_ft[output_slices] = out_ft[output_slices] + out_contribution

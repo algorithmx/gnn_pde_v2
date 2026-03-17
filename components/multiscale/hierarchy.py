@@ -70,7 +70,7 @@ def build_hierarchical_graphs(
     for level in range(levels - 1):
         # Determine k for this level
         if nodes_per_level is not None and level < len(nodes_per_level):
-            k = nodes_per_level[level + 1]
+            k = nodes_per_level[level]
         else:
             k = int(num_nodes * pooling_ratio)
         
