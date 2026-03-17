@@ -14,6 +14,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Jump to next version..
 
+## [2.7.12] - 2026-03-17
+
+### Breaking Changes
+
+- Examples.
+
+## [2.7.11] - 2026-03-17
+
+### Breaking Changes
+
+- Transolver. 
+
 ## [2.7.10] - 2026-03-17
 
 ### Breaking Changes
@@ -89,10 +101,6 @@ Jump to next version..
 ### Added
 
 - **Examples**
-  - ``
-  - ``
-  - ``
-  - ``
 
 ## [2.7.7] - 2026-03-17
 

@@ -11,11 +11,12 @@ A clean implementation of the Encode-Process-Decode architecture for PDE-GNNs wi
 - **Modular EPD Architecture**: Clean separation of Encoder, Processor, Decoder components
 - **Clean API Design**: Lean, composable core API with consistent patterns
 - **Component-Based**: Reusable building blocks (MLP, GraphNetBlock, FNOBlock, etc.)
-- **Pluggable Conditioning**: Protocol-based conditioning system (AdaLN, FiLM, DualAdaLN) for transformers
-- **Research Reproductions**: 7+ paper implementations with exact equivalence
-- **Optional Auto-Registration**: Convenience models can self-register for config-based instantiation
+- **Pluggable Conditioning**: Protocol-based conditioning system (AdaLN, FiLM, DualAdaLN)
+- **Multiple Attention Mechanisms**: Standard MHA, Physics Token Attention, QK-Norm, Sparse Attention
+- **Temperature Mechanisms**: Adaptive, annealed, per-head temperature scaling
+- **Research Reproductions**: 10+ paper implementations with exact equivalence
+- **Auto-Registration**: Models can self-register for config-based instantiation
 - **Flexible Dependencies**: Graceful fallbacks when optional dependencies unavailable
-- **Comprehensive Testing**: Full test suite with pytest
 
 ### Architecture Philosophy
 
@@ -29,42 +30,57 @@ The framework provides two usage patterns:
 ```
 gnn_pde_v2/
 ├── core/                    # Minimal core primitives
-│   ├── graph.py            # GraphsTuple, batching utilities
-│   ├── base.py             # Lean BaseModel marker class
-│   └── functional.py       # Scatter operations, aggregation
-├── components/              # Reusable building blocks (canonical lean API)
-│   ├── encoders.py         # MLP and encoder helpers
-│   ├── processors.py       # GraphNetBlock and GraphNetProcessor
-│   ├── decoders.py         # MLPDecoder variants
-│   ├── layers.py           # Residual layers
-│   ├── fno.py              # FNO components (SpectralConv, etc.)
-│   ├── transformer.py      # Transformer components
-│   └── probe.py            # Probe-based components
+│   ├── base.py              # BaseModel marker class
+│   ├── graph.py             # GraphsTuple, batch_graphs, unbatch_graphs
+│   ├── mlp.py               # MLP, SinActivation
+│   ├── functional.py        # Scatter operations (torch_scatter fallback)
+│   ├── aggregation.py       # Aggregation protocol (Sum, Mean, Max, Min)
+│   ├── registry.py          # AutoRegisterModel, MODEL_REGISTRY
+│   └── protocols.py        # Structural protocols (GraphProcessor, etc.)
+├── components/              # Reusable building blocks
+│   ├── layers.py            # Residual, GatedResidual, make_residual
+│   ├── encoders.py          # (legacy, use models.gnn_model.MeshEncoder)
+│   ├── processors.py        # GraphNetBlock, MessagePassingBlock, GENBlock
+│   ├── gcn.py               # GCNBlock, GCNBlockWithEdgeFeatures
+│   ├── transformer.py       # TransformerBlock, TransformerProcessor
+│   ├── attention.py         # MultiHeadAttention, PhysicsTokenAttention, etc.
+│   ├── conditioning.py      # AdaLN, DualAdaLN, FiLM, ZeroConditioning
+│   ├── temperature.py       # Temperature mechanisms
+│   ├── spectral.py         # SpectralConv, FNOBlock, AFNOBlock, FNOProcessor
+│   ├── decoders.py         # MLPDecoder, IndependentMLPDecoder
+│   ├── probe.py             # ProbeDecoder, WindFarmGNO, ProbeGraphBuilder
+│   ├── rbf.py              # LearnableRBFEncoder, GaussianRBFEncoder
+│   └── fourier_encoder.py  # FourierFeatureEncoder
 ├── models/                  # Complete model implementations
 │   ├── encode_process_decode.py  # Clean EPD model
-│   ├── gnn_model.py             # GNN models (GraphNet, MeshGraphNet)
-│   └── fno_model.py             # FNO models (FNO, TFNO)
+│   ├── gnn_model.py             # GraphNet, MeshGraphNet, MeshEncoder
+│   ├── fno_model.py             # FNO, TFNO, AFNO (lazy loaded)
+│   └── multiscale_fno.py        # MultiscaleFNO (lazy loaded)
 ├── examples/                 # Research paper reproductions
 │   ├── example_meshgraphnets.py     # MeshGraphNets (ICML 2021)
 │   ├── example_deepxde.py           # DeepXDE (SIAM Review 2021)
 │   ├── example_neuraloperator_fno.py # NeuralOperator FNO (ICLR 2021)
 │   ├── example_transolver.py         # Transolver (ICML 2024)
+│   ├── example_transolver_v3.py      # Transolver-3 - 160M+ cell (2026)
 │   ├── example_unisolver.py          # Unisolver (ICML 2024)
 │   ├── example_windfarm_gno.py       # WindFarm GNO (2025)
-│   └── example_graph_pde_gno.py      # Graph-PDE GNO (2020)
+│   ├── example_graph_pde_gno.py      # Graph-PDE GNO (2020)
+│   ├── example_mgkn.py               # MGKN (Mesh Graph Networks)
+│   ├── example_low_width_graph_transformer.py  # Low-width transformer
+│   ├── example_qk_norm.py            # QK-Norm attention
+│   ├── example_relative_position_attention.py   # Relative position
+│   ├── example_graph_unets.py        # Graph U-Nets
+│   ├── example_graph_unets_framework.py  # Graph U-Nets framework
+│   ├── example_ufno.py               # UFNO (U-shaped FNO)
+│   └── training_utils.py             # Training utilities
 ├── utils/                   # Utility functions
-│   ├── graph_utils.py      # Graph processing utilities
-│   └── spatial_utils.py    # Spatial computations
+│   ├── graph_utils.py      # knn_graph, radius_graph, compute_edge_features
+│   └── spatial_utils.py    # grid_to_points, points_to_grid
 └── tests/                   # Comprehensive test suite
-    ├── test_core.py        # Core functionality tests
-    ├── test_components.py  # Component tests
-    └── test_examples.py    # Example reproduction tests
+    ├── test_core.py
+    ├── test_components.py
+    └── test_examples.py
 ```
-
-`MLP` supports:
-- arbitrary depth via `hidden_dims`
-- hidden vs final normalization separately (`norm=` vs `final_norm=`)
-- dense or pointwise-conv stacks via `linear_factory`
 
 ## Quick Start
 
@@ -80,14 +96,17 @@ import torch
 class MyModel(torch.nn.Module):
     def __init__(self):
         super().__init__()
-        self.node_encoder = MLP(in_dim=5, out_dim=128, hidden_dims=[128], use_layer_norm=False)
-        self.edge_encoder = MLP(in_dim=3, out_dim=128, hidden_dims=[128], use_layer_norm=False)
+        self.node_encoder = MLP(in_dim=5, out_dim=128, hidden_dims=[128])
+        self.edge_encoder = MLP(in_dim=3, out_dim=128, hidden_dims=[128])
         self.processor = GraphNetProcessor(
-            node_dim=128,
-            edge_dim=128,
+            latent_dim=128,
             n_layers=4,
         )
-        self.decoder = MLPDecoder(node_dim=128, out_dim=2, hidden_dims=[128, 64])
+        self.decoder = MLPDecoder(
+            latent_dim=128,
+            out_dim=2,
+            hidden_dims=[128, 64],
+        )
     
     def forward(self, graph):
         latent = graph.replace(
@@ -112,139 +131,225 @@ model = MyModel()
 output = model(graph)  # [10, 2]
 ```
 
-## Available Components
+## Core Layer (`gnn_pde_v2.core`)
 
-### Core Building Blocks
+### Data Structures
+| Component | Description |
+|-----------|-------------|
+| `GraphsTuple` | Minimal graph representation (nodes, edges, receivers, senders, globals) |
+| `batch_graphs()` | Batch multiple graphs into single GraphsTuple |
+| `unbatch_graphs()` | Unbatch GraphsTuple into list of individual graphs |
 
-| Component | Description | Usage |
-|-----------|-------------|-------|
-| `MLP` | Flexible dense or pointwise-conv feedforward stack with pre-activation option | Encoder/Decoder |
-| `BaseModel` | Minimal marker class for model hierarchy (no magic, no registry) | Base class |
-| `SinActivation` | Sine activation for SIREN-style networks | Activation |
-| `FourierFeatureEncoder` | Random Fourier feature lifting | Encoder |
-| `GraphNetBlock` | Graph message passing block | Processor |
-| `TransformerBlock` | Multi-head attention block with optional conditioning | Processor |
-| `FNOBlock` | Fourier neural operator block | Processor |
-| `Residual` | Residual connection wrapper | Any layer |
-| `ProbeDecoder` | Arbitrary query point decoder | Decoder |
+### Base Classes
+| Component | Description |
+|-----------|-------------|
+| `BaseModel` | Minimal marker class (no magic, no registry) |
+| `AutoRegisterModel` | Auto-registers subclasses in MODEL_REGISTRY |
+| `MODEL_REGISTRY` | Standalone registry with create(), register(), list_models() |
 
-### Functional Operations (core.functional)
+### MLP & Activations
+| Component | Description |
+|-----------|-------------|
+| `MLP` | Flexible dense or pointwise-conv feedforward stack |
+| `SinActivation` | SIREN-style sine activation |
 
+### Functional Operations
 | Function | Description |
 |----------|-------------|
-| `scatter_sum` | Sum aggregation (scatter_add) |
+| `scatter_sum` | Sum aggregation (torch_scatter or pure PyTorch fallback) |
 | `scatter_mean` | Mean aggregation |
 | `scatter_max` | Max aggregation |
+| `scatter_min` | Min aggregation |
+| `scatter_softmax` | Softmax within groups |
 | `aggregate_edges` | Aggregate edge features to receiver nodes |
 | `broadcast_nodes_to_edges` | Broadcast node features to edges |
+| `broadcast_global` | Broadcast per-graph globals to nodes |
+| `aggregate_to_global` | Pool node features to graph-level |
 
-### Encoders (components.encoders)
+### Aggregation Protocol
+| Component | Description |
+|-----------|-------------|
+| `Aggregation` | Abstract base for aggregations |
+| `Sum` | Sum aggregation |
+| `Mean` | Mean aggregation |
+| `Max` | Max aggregation |
+| `Min` | Min aggregation |
+| `get_aggregation()` | Factory function |
+
+### Protocols
+| Protocol | Description |
+|----------|-------------|
+| `GraphEncoder` | Protocol for encoding modules (GraphsTuple → GraphsTuple) |
+| `GraphProcessor` | Protocol for processor modules (GraphsTuple → GraphsTuple) |
+| `NodeDecoder` | Protocol for node decoders |
+| `QueryDecoder` | Protocol for query-based decoders |
+| `Decoder` | Union of NodeDecoder and QueryDecoder |
+| `GridProcessor` | Protocol for grid processors (Tensor → Tensor) |
+| `GridModel` | Protocol for grid-to-grid models |
+| `PositionEncoder` | Protocol for position encoders |
+| `ConditioningProtocol` | ABC for conditioning mechanisms |
+| `Modulation` | Dataclass for modulation parameters (shift, scale, gate, cross_kv) |
+
+## Components Layer (`gnn_pde_v2.components`)
+
+### Residual Connections
 
 | Component | Description |
 |-----------|-------------|
-| `MLPEncoder` | Simple graph encoder with separate node and optional edge MLPs |
-| `MLPMeshEncoder` | MeshGraphNets-style encoder with node, edge, and optional global MLPs |
-| `make_mlp_encoder()` | Factory function for creating MLP encoders |
+| `Residual` | Simple residual: `x + f(x)` with optional norm/scale |
+| `GatedResidual` | Gated residual: `(1-g)*x + g*f(x)` |
+| `make_residual()` | Factory for runtime selection |
 
-### Decoders (components.decoders)
-
-| Component | Description |
-|-----------|-------------|
-| `MLPDecoder` | Simple MLP decoder operating on node features |
-| `IndependentMLPDecoder` | Separate MLPs for each output component (multi-task) |
-| `ProbeDecoder` | Arbitrary query point decoder for continuous fields |
-
-### Residual Connections (components.layers)
+### Processors (Graph-based)
 
 | Component | Description |
 |-----------|-------------|
-| `Residual` | Basic residual wrapper: `x + f(x)` |
-| `ResidualBlock` | Configurable wrapper with 'add', 'scaled', or 'none' types |
-| `GatedResidual` | Learnable gate: `(1-g)*x + g*f(x)` (Highway-style) |
-| `PreNormResidual` | Pre-normalization block (Transformer Pre-LN style) |
-| `ResidualSequence` | Sequence of residual blocks with consistent interface |
-| `SkipConnection` | Flexible skip with optional projection for dimension changes |
-| `make_residual()` | Factory function to create residual wrapper by type |
+| `MessagePassingBlock` | Abstract base for graph message passing |
+| `GraphNetBlock` | DeepMind-style node/edge update |
+| `EdgeConditionedConvBlock` | Edge-conditioned convolution |
+| `EdgeConvBlock` | Edge convolution (PointNet-style) |
+| `GENBlock` | Graph Edges Networks block |
+| `GlobalGraphNetBlock` | Full encoder-processor-decoder with globals |
+| `GlobalGraphNetProcessor` | Multi-layer global GNN processor |
+| `GraphNetProcessor` | Multi-layer GraphNet processor |
+| `GCNBlock` | Graph Convolutional Network block |
+| `GCNBlockWithEdgeFeatures` | GCN with edge features |
+| `TransformerBlock` | Transformer block with optional conditioning |
+| `TransformerProcessor` | Multi-layer transformer for nodes |
 
-### Attention & Transformer Components (components.transformer)
+### Attention Mechanisms
 
 | Component | Description |
 |-----------|-------------|
 | `MultiHeadAttention` | Standard multi-head self-attention |
-| `TransformerBlock` | Full transformer block with attention, MLP, and optional conditioning |
 | `PhysicsTokenAttention` | Transolver-style slice-attention-deslice (O(G²) vs O(N²)) |
-| `TransformerProcessor` | Multi-layer transformer processor for graph nodes |
+| `PhysicsTokenAttentionV3` | Transolver-3 with tiling for 160M+ cell meshes |
+| `QKNormMultiHeadAttention` | Attention with QK normalization |
+| `SparseGraphAttention` | Sparse attention for graphs |
+| `RelativePositionEncoding` | Relative position encoding |
+| `TiledSliceOperation` | Tiling operation for large graphs |
 
-### Conditioning System (components.transformer)
-
-The framework provides a pluggable conditioning protocol for transformer-based models:
+### Conditioning System
 
 | Component | Description |
 |-----------|-------------|
-| `Modulation` | Dataclass: shift, scale, gate, cross_kv parameters for attention modulation |
-| `ConditioningProtocol` | ABC for implementing custom conditioning schemes |
 | `ZeroConditioning` | Identity passthrough (no modulation) |
-| `AdaLNConditioning` | Single-source Adaptive Layer Normalization |
-| `DualAdaLNConditioning` | UniSolver-style dual conditioning (μ + f embeddings) |
-| `FiLMConditioning` | Feature-wise Linear Modulation (γ, β) |
+| `AdaLNConditioning` | Single-source Adaptive Layer Norm |
+| `AdaLNConditioningNoGate` | AdaLN without gate |
+| `DualAdaLNConditioning` | Dual AdaLN (μ + f embeddings) |
+| `DualAdaLNConditioningNoGate` | Dual AdaLN without gate |
+| `FiLMConditioning` | Feature-wise Linear Modulation |
+| `apply_modulation()` | Apply modulation to hidden states |
+
+### Temperature Mechanisms
+
+| Component | Description |
+|-----------|-------------|
+| `TemperatureBase` | Abstract base for temperature |
+| `FixedTemperature` | Fixed temperature scaling |
+| `LearnableScalarTemperature` | Learnable scalar temperature |
+| `PerHeadTemperature` | Per-head temperature |
+| `AdaptiveTemperature` | Adaptive temperature |
+| `AnnealedTemperature` | Annealed temperature |
+| `create_temperature_module()` | Factory function |
+
+### Spectral (Grid-based)
+
+| Component | Description |
+|-----------|-------------|
+| `SpectralConv` | Standard spectral convolution |
+| `SeparableSpectralConv` | Factorized spectral convolution |
+| `SpectralConvBase` | Base class for spectral convs |
+| `FNOBlock` | FNO block |
+| `AFNOBlock` | Adaptive FNO block |
+| `FNOMLPBlock` | FNO with MLP |
+| `FNOProcessor` | Complete FNO processor |
+| `make_spectral_conv()` | Factory for standard vs separable |
+
+### Decoders
+
+| Component | Description |
+|-----------|-------------|
+| `MLPDecoder` | MLP-based node decoder |
+| `IndependentMLPDecoder` | Independent MLPs per output |
+| `ProbeDecoder` | Query-based decoder for arbitrary positions |
+| `WindFarmGNO` | Wind farm-specific GNO |
+| `ProbeGraphBuilder` | Graph builder for probe decoder |
+
+### Encoders & Feature Engineering
+
+| Component | Description |
+|-----------|-------------|
+| `FourierFeatureEncoder` | Random Fourier feature lifting |
+| `LearnableRBFEncoder` | Learnable RBF encoder with cosine cutoff |
+| `GaussianRBFEncoder` | Fixed Gaussian RBF encoder |
+
+## Models Layer (`gnn_pde_v2.models`)
+
+### Lazy Loading
+
+Models use lazy loading - some require additional dependencies:
 
 ```python
-from gnn_pde_v2.core.protocols import Modulation, ConditioningProtocol
-from gnn_pde_v2.components import AdaLNConditioning, FiLMConditioning
-
-# Use AdaLN conditioning with transformer
-conditioner = AdaLNConditioning(cond_dim=64, out_dim=128)
-block = TransformerBlock(dim=128, conditioner=conditioner)
-
-# Or implement custom conditioning
-class MyConditioning(ConditioningProtocol):
-    def forward(self, cond: torch.Tensor) -> Modulation:
-        # Custom logic to produce modulation parameters
-        return Modulation(shift=..., scale=..., gate=..., cross_kv=...)
+from gnn_pde_v2.models import (
+    EncodeProcessDecode,  # Always available
+    FNO, TFNO, AFNO,      # Lazy loaded
+    GraphNet, MeshGraphNet,  # Lazy loaded
+)
 ```
 
-### FNO Components (components.fno)
+### Registered Models
 
-| Component | Description |
-|-----------|-------------|
-| `SpectralConv` | Spectral convolution with learnable complex weights in Fourier space |
-| `FNOBlock` | Standard Fourier Neural Operator block |
-| `AFNOBlock` | Adaptive FNO with block-diagonal weights and soft-thresholding |
-| `FNOProcessor` | Complete FNO processor with lifting, blocks, and projection |
+| Name | Aliases | Type | Description |
+|------|---------|------|-------------|
+| `graphnet` | gnn, graph_net | Graph | Standard GNN |
+| `meshgraphnet` | mgn, mesh_graph_net | Graph | MeshGraphNets-style |
+| `fno` | fourier_no, fno2d | Grid | Fourier Neural Operator |
+| `tfno` | tensorized_fno | Grid | Tensorized FNO |
+| `afno` | adaptive_fno | Grid | Adaptive FNO |
 
-### Probe Components (components.probe)
+### Using the Registry
 
-| Component | Description |
-|-----------|-------------|
-| `ProbeMessagePassingLayer` | Single message passing layer for probe graphs |
-| `ProbeDecoder` | Decoder for arbitrary query points |
+```python
+from gnn_pde_v2.core import MODEL_REGISTRY, AutoRegisterModel
 
-### Processors
+# Create by name (for config-driven workflows)
+model = MODEL_REGISTRY.create('graphnet', node_in_dim=11, edge_in_dim=3, out_dim=3)
 
-| Type | Component | Key Features |
-|------|-----------|--------------|
-| **Graph-based** | `GraphNetBlock` | Message passing, edge updates |
-| **Graph Processor** | `GraphNetProcessor` | Multiple GraphNet blocks in sequence |
-| **Attention** | `TransformerBlock` | Multi-head attention, physics tokens, conditioning |
-| **Transformer Processor** | `TransformerProcessor` | Multi-layer transformer for nodes |
-| **Spectral** | `FNOBlock` | FFT-based global convolution |
-| **Spectral Processor** | `FNOProcessor` | Complete FNO with lifting/projection |
+# Or use AutoRegisterModel directly
+model = AutoRegisterModel.create('fno', in_channels=1, out_channels=1, width=64)
+```
 
-### Research Reproductions
+### Custom Model Registration
 
-The framework includes exact reproductions of 7+ major PDE-GNN papers:
+```python
+from gnn_pde_v2.core import AutoRegisterModel
+
+class MyModel(AutoRegisterModel, name='my_model', aliases=['mymodel']):
+    def __init__(self, hidden_dim=128):
+        super().__init__()
+        self.net = nn.Linear(hidden_dim, hidden_dim)
+
+# Create by name
+model = AutoRegisterModel.create('my_model', hidden_dim=256)
+```
+
+## Research Reproductions
+
+The framework includes exact reproductions of 10+ major PDE-GNN papers:
 
 | Paper | Model | Key Innovation |
 |-------|-------|----------------|
-| MeshGraphNets (ICML 2021) | `meshgraphnets` | Unstructured mesh simulation |
+| MeshGraphNets (ICML 2021) | `meshgraphnet` | Unstructured mesh simulation |
 | DeepXDE (SIAM 2021) | `deepxde` | Physics-informed neural networks |
 | NeuralOperator FNO (ICLR 2021) | `fno` | Fourier neural operators |
 | Transolver (ICML 2024) | `transolver` | Physics-attention mechanism |
+| Transolver-3 (2026) | `transolver_v3` | 160M+ cell industrial scale |
 | Unisolver (ICML 2024) | `unisolver` | PDE-conditional transformers |
 | WindFarm GNO (2025) | `windfarm_gno` | Two-stage graph operator |
 | Graph-PDE GNO (2020) | `graph_pde_gno` | Edge-conditioned convolution |
-
-See `examples/README.md` for detailed implementation notes.
+| MGKN | `mgkn` | Mesh Graph Networks |
+| UFNO | `ufno` | U-shaped FNO |
 
 ## Testing
 
@@ -264,8 +369,8 @@ pytest gnn_pde_v2/tests/test_examples.py
 
 ### Test Coverage
 
-- **Core**: Graph processing, BaseModel, functional operations
-- **Components**: All encoders, processors, decoders
+- **Core**: Graph processing, BaseModel, functional operations, aggregation
+- **Components**: All encoders, processors, decoders, attention, conditioning
 - **Registry**: Auto-registration for model discovery
 - **Examples**: Research paper reproduction accuracy
 
@@ -280,17 +385,19 @@ pip install torch numpy
 ### Optional Dependencies
 
 ```bash
-# For config-based experiments (optional)
-pip install pydantic
+# For faster scatter operations (recommended for large graphs)
+pip install torch-scatter
+
+# For graph construction (knn_graph, radius_graph)
+pip install torch-cluster
 
 # For testing
 pip install pytest pytest-cov
-
-# For advanced examples
-pip install torch-scatter torch-sparse
 ```
 
-The framework gracefully handles missing optional dependencies - features are disabled with clear error messages.
+The framework gracefully handles missing optional dependencies:
+- `torch_scatter`: Falls back to pure PyTorch implementation
+- `torch_cluster`: Required for `knn_graph` and `radius_graph`
 
 ## Design Principles
 
@@ -363,9 +470,9 @@ from gnn_pde_v2.core import MLP
 from gnn_pde_v2.components import GraphNetBlock, GlobalGraphNetBlock, Residual
 
 # Node/edge-only (no global state)
-encoder = MLP(in_dim=5, out_dim=128, hidden_dims=[128], use_layer_norm=False)
+encoder = MLP(in_dim=5, out_dim=128, hidden_dims=[128])
 processor = Residual(GraphNetBlock(latent_dim=128))
-decoder = MLP(in_dim=128, out_dim=2, hidden_dims=[64], use_layer_norm=False)
+decoder = MLP(in_dim=128, out_dim=2, hidden_dims=[64])
 
 # With global state (PDE parameters, time, BCs)
 processor_g = Residual(GlobalGraphNetBlock(latent_dim=128, global_latent_dim=32))
@@ -404,14 +511,6 @@ residual_block = GatedResidual(module, gate_bias=2.0)
 conv = SpectralConv(64, 64, [16, 16])
 ```
 
-**Available factories:**
-- `make_residual`: Select residual connection type at runtime
-- `make_spectral_conv`: Select spectral conv implementation (standard vs separable)
-
-**Prefer direct classes for:**
-- `MeshEncoder`, `MLPDecoder` - Direct instantiation is clearer
-- `GraphNetProcessor`, `FNOProcessor` - No runtime selection needed
-
 ### Paper Reproduction
 
 ```python
@@ -431,9 +530,9 @@ model = MeshGraphNets(
 The framework supports several extension mechanisms:
 
 1. **Component Extension**: Inherit from existing components
-2. **Model Registration**: Use `AutoRegisterModel` (inherits from `BaseModel`) for config-based instantiation
+2. **Model Registration**: Use `AutoRegisterModel` for config-based instantiation
 3. **Custom Conditioning**: Implement `ConditioningProtocol` for new modulation schemes
-4. **Configuration**: Extend Pydantic configs for new parameters
+4. **Custom Aggregation**: Implement `Aggregation` protocol for new reduction methods
 5. **Paper Reproduction**: Follow examples pattern for new papers
 
 ### Model Hierarchy
@@ -445,4 +544,4 @@ nn.Module
                     └── YourModel       # Custom models with auto-registration
 ```
 
-See `examples/README.md` for detailed extension guidelines and design patterns used in research reproductions.
+See `examples/` directory for detailed implementation patterns used in research reproductions.

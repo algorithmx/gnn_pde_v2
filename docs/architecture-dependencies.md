@@ -17,41 +17,46 @@ graph TB
         GRAPH[core.graph<br/>GraphsTuple]
         MLP[core.mlp<br/>MLP, SinActivation]
         FUNC[core.functional<br/>scatter_*, aggregate_*]
-        REGISTRY[core.registry<br/>AutoRegisterModel]
+        AGG[core.aggregation<br/>Aggregation, Sum, Mean, Max, Min]
+        REG[core.registry<br/>AutoRegisterModel, MODEL_REGISTRY]
+        PROT[core.protocols<br/>ConditioningProtocol, GraphProcessor, etc.]
     end
 
     subgraph "Components Layer"
-        ENC[components.encoders<br/>MeshEncoder]
+        PROC[components.processors<br/>GraphNetBlock, MessagePassingBlock, GENBlock]
+        GCN[components.gcn<br/>GCNBlock, GCNBlockWithEdgeFeatures]
+        TRANS[components.transformer<br/>TransformerBlock, TransformerProcessor]
+        ATTN[components.attention<br/>MultiHeadAttention, PhysicsTokenAttention, QKNorm, SparseGraphAttention]
+        COND[components.conditioning<br/>AdaLN, DualAdaLN, FiLM, ZeroConditioning]
+        TEMP[components.temperature<br/>TemperatureBase, AdaptiveTemperature, AnnealedTemperature]
+        SPECT[components.spectral<br/>SpectralConv, FNOBlock, AFNOBlock, FNOProcessor]
         DEC[components.decoders<br/>MLPDecoder, IndependentMLPDecoder]
-        PROC[components.processors<br/>GraphNetBlock, GraphNetProcessor]
-        TRANS[components.transformer<br/>TransformerBlock, Conditioning]
-        SPECTRAL[components.spectral<br/>SpectralConv, FNOBlock, AFNOBlock, FNOProcessor]
-        LAYERS[components.layers<br/>Residual, GatedResidual]
-        PROBE[components.probe<br/>ProbeDecoder, ProbeMessagePassingLayer]
+        PROBE[components.probe<br/>ProbeDecoder, WindFarmGNO, ProbeGraphBuilder]
+        RBF[components.rbf<br/>LearnableRBFEncoder, GaussianRBFEncoder]
         FOURIER[components.fourier_encoder<br/>FourierFeatureEncoder]
+        LAYERS[components.layers<br/>Residual, GatedResidual, make_residual]
     end
 
     subgraph "Models Layer"
         EPD[models.encode_process_decode<br/>EncodeProcessDecode]
-        GNN_MODEL[models.gnn_model<br/>GraphNet, MeshGraphNet]
-        FNO_MODEL[models.fno_model<br/>FNO, TFNO, AFNO]
-    end
-
-    subgraph "Convenient Layer"
-        CONFIG[convenient.config<br/>*Config classes]
+        GNN[models.gnn_model<br/>GraphNet, MeshGraphNet, MeshEncoder]
+        FNO[models.fno_model<br/>FNO, TFNO, AFNO]
+        MSFNO[models.multiscale_fno<br/>MultiscaleFNO]
     end
 
     subgraph "Examples"
         EX_MESH[examples.example_meshgraphnets]
-        EX_DEEP[examples.example_deepxde]
+        EX_GNN[examples.example_graph_pde_gno]
         EX_FNO[examples.example_neuraloperator_fno]
-        EX_TRANS[examples.example_transolver]
+        EX_TRANS[examples.example_transolver, example_transolver_v3]
         EX_UNI[examples.example_unisolver]
-        TRAINING[examples.training_utils<br/>Model, LossFunction]
+        EX_WIND[examples.example_windfarm_gno]
+        EX_DEEP[examples.example_deepxde]
+        TRAINING[examples.training_utils]
     end
 
     subgraph "Utils"
-        GRAPH_UTILS[utils.graph_utils<br/>knn_graph, radius_graph]
+        GRAPH_UTILS[utils.graph_utils<br/>knn_graph, radius_graph, compute_edge_features]
         SPATIAL[utils.spatial_utils<br/>grid_to_points, points_to_grid]
     end
 
@@ -59,60 +64,83 @@ graph TB
     BASE --> TORCH
     GRAPH --> TORCH
     MLP --> TORCH
-    MLP --> BASE
     FUNC --> TORCH
     FUNC -.->|optional| TORCH_SCATTER
-    REGISTRY --> BASE
+    AGG --> TORCH
+    REG --> BASE
+    PROT --> TORCH
 
     %% Components depend on Core
-    ENC --> MLP
-    ENC --> GRAPH
+    PROC --> GRAPH
+    PROC --> MLP
+    PROC --> FUNC
+    PROC --> AGG
+
+    GCN --> GRAPH
+    GCN --> MLP
+
+    TRANS --> MLP
+    TRANS --> PROT
+
+    ATTN --> MLP
+    ATTN --> TORCH
+
+    COND --> PROT
+    COND --> MLP
+
+    TEMP --> TORCH
+    TEMP --> MLP
+
+    SPECT --> TORCH
+    SPECT --> NUMPY
+
     DEC --> MLP
     DEC --> GRAPH
-    PROC --> MLP
-    PROC --> GRAPH
-    PROC --> FUNC
-    TRANS --> MLP
-    TRANS --> GRAPH
-    SPECTRAL --> TORCH
-    SPECTRAL --> NUMPY
-    LAYERS --> TORCH
+    DEC --> PROT
+
     PROBE --> MLP
     PROBE --> GRAPH
     PROBE --> FUNC
+
+    RBF --> MLP
     FOURIER --> TORCH
     FOURIER --> GRAPH
 
-    %% Models depend on Components AND Core (CLEAN - no violations!)
+    LAYERS --> TORCH
+
+    %% Models depend on Components AND Core
     EPD --> GRAPH
-    EPD --> BASE
+    EPD --> PROT
 
-    GNN_MODEL --> GRAPH
-    GNN_MODEL --> MLP
-    GNN_MODEL --> REGISTRY
-    GNN_MODEL --> ENC
-    GNN_MODEL --> PROC
-    GNN_MODEL --> DEC
-    GNN_MODEL --> EPD
+    GNN --> GRAPH
+    GNN --> MLP
+    GNN --> REG
+    GNN --> PROC
+    GNN --> DEC
+    GNN --> EPD
 
-    FNO_MODEL --> REGISTRY
-    FNO_MODEL --> SPECTRAL
+    FNO --> REG
+    FNO --> SPECT
 
-    %% Convenient dependencies (optional sugar layer)
-    CONFIG -.->|optional| PYDANTIC
+    MSFNO --> REG
+    MSFNO --> SPECT
 
     %% Examples depend on everything
-    EX_MESH --> GRAPH
-    EX_MESH --> PROC
-    EX_MESH --> REGISTRY
+    EX_MESH --> GNN
+    EX_GNN --> PROC
+    EX_GNN --> REG
 
-    EX_DEEP --> MLP
-    EX_DEEP --> FOURIER
-
-    EX_FNO --> FNO_MODEL
+    EX_FNO --> FNO
 
     EX_TRANS --> TRANS
+    EX_TRANS --> ATTN
+
     EX_UNI --> TRANS
+
+    EX_WIND --> PROBE
+
+    EX_DEEP --> FOURIER
+    EX_DEEP --> MLP
 
     TRAINING --> TORCH
 
@@ -128,292 +156,294 @@ graph TB
     classDef core fill:#d0bfff,stroke:#7950f2
     classDef component fill:#a9e34b,stroke:#5c940d
     classDef model fill:#ffd43b,stroke:#fab005
-    classDef convenient fill:#ff922b,stroke:#e8590c
     classDef example fill:#74c0fc,stroke:#339af0
     classDef optional fill:#ffe066,stroke:#fab005,stroke-dasharray: 5 5
 
-    class BASE,GRAPH,MLP,FUNC,REGISTRY core
-    class ENC,DEC,PROC,TRANS,SPECTRAL,LAYERS,PROBE,FOURIER component
-    class EPD,GNN_MODEL,FNO_MODEL model
-    class CONFIG convenient
-    class EX_MESH,EX_DEEP,EX_FNO,EX_TRANS,EX_UNI,TRAINING example
+    class BASE,GRAPH,MLP,FUNC,AGG,REG,PROT core
+    class PROC,GCN,TRANS,ATTN,COND,TEMP,SPECT,DEC,PROBE,RBF,FOURIER,LAYERS component
+    class EPD,GNN,FNO,MSFNO model
+    class EX_MESH,EX_GNN,EX_FNO,EX_TRANS,EX_UNI,EX_WIND,EX_DEEP,TRAINING example
 ```
 
-## Layer Architecture (CLEAN - No Violations)
+## Layer Architecture
 
 ```mermaid
 graph LR
-    subgraph "Current Layering (Clean)"
-        direction TB
-        C1[Core] --> C2[Components] --> C3[Models]
-        C3 --> C4[Convenient<br/>optional]
-        C1 --> C4
-    end
+    direction TB
+    C1[Core<br/>base, graph, mlp, functional<br/>aggregation, registry, protocols] --> C2[Components<br/>processors, transformers, attention<br/>spectral, decoders, etc.]
+    C2 --> C3[Models<br/>encode_process_decode<br/>gnn_model, fno_model, multiscale_fno]
+    C1 --> C4[Examples<br/>example_*.py]
 
     style C1 fill:#d0bfff
     style C2 fill:#a9e34b
     style C3 fill:#ffd43b
-    style C4 fill:#ff922b
+    style C4 fill:#74c0fc
 ```
 
-## Component Internal Dependencies
+**Note**: There is NO `convenient/` layer in this version. The registry (`AutoRegisterModel`, `MODEL_REGISTRY`) is in `core/`.
 
-```mermaid
-graph TB
-    subgraph "Encoder Dependencies"
-        MESHE[MeshEncoder] --> MLP
-        MESHE --> GraphsTuple
-    end
+## Core Layer Details
 
-    subgraph "Decoder Dependencies"
-        MLPD[MLPDecoder] --> MLP
-        MLPD --> GraphsTuple
-        INDD[IndependentMLPDecoder] --> MLP
-        INDD --> GraphsTuple
-        PROBED[ProbeDecoder] --> MLP
-        PROBED --> GraphsTuple
-        PROBED --> scatter_mean
-    end
+### core/base.py - BaseModel
+Minimal marker class for framework models. No auto-registration.
 
-    subgraph "Processor Dependencies"
-        GN_B[GraphNetBlock] --> MLP
-        GN_B --> scatter_sum
-        GN_B --> scatter_mean
-        GNP[GraphNetProcessor] --> GN_B
-        GNP --> Residual
-
-        T_B[TransformerBlock] --> MLP
-        T_B --> MultiHeadAttention
-        T_B --> Conditioning
-        TP[TransformerProcessor] --> T_B
-
-        SPEC[SpectralConv] --> torch.fft
-        FNO_B[FNOBlock] --> SPEC
-        AFNO_B[AFNOBlock] --> SPEC
-        FNOP[FNOProcessor] --> FNO_B
-        AFNOP[AFNOProcessor] --> AFNO_B
-    end
+```python
+from gnn_pde_v2.core import BaseModel
 ```
 
-## Conditioning System Dependencies
+### core/registry.py - ModelRegistry & AutoRegisterModel
+Two registration mechanisms:
+1. **ModelRegistry** - Standalone registry object with decorator/imperative APIs
+2. **AutoRegisterModel** - Base class that auto-registers subclasses
 
-```mermaid
-graph TB
-    subgraph "Conditioning Protocol"
-        PROTO[ConditioningProtocol<br/>ABC]
-        MOD[Modulation<br/>dataclass]
-    end
+```python
+from gnn_pde_v2.core import MODEL_REGISTRY, AutoRegisterModel
 
-    ZERO[ZeroConditioning]
-    ADA[AdaLNConditioning]
-    DUAL[DualAdaLNConditioning]
-    FILM[FiLMConditioning]
+# Decorator style
+@MODEL_REGISTRY.register('my_model', aliases=['mymodel'])
+class MyModel(nn.Module):
+    ...
 
-    ZERO --> PROTO
-    ADA --> PROTO
-    DUAL --> PROTO
-    FILM --> PROTO
-
-    ADA --> MOD
-    DUAL --> MOD
-    FILM --> MOD
-    ZERO --> MOD
-
-    TRANS_C[TransformerBlock] --> PROTO
-    TRANS_P[TransformerProcessor] --> PROTO
+# Base class style
+class MyModel(AutoRegisterModel, name='my_model'):
+    ...
 ```
 
-## Registry & Auto-Registration Flow
+### core/graph.py - GraphsTuple
+Minimal graph representation with batching utilities.
 
-```mermaid
-sequenceDiagram
-    participant User
-    participant AutoRegisterModel as core.registry
-    participant Models as models/*
-    participant Examples
-
-    Note over AutoRegisterModel: Now in core/ (not convenient/)
-
-    User->>AutoRegisterModel: Define class with name='foo'
-    AutoRegisterModel->>AutoRegisterModel: Register on class creation
-    AutoRegisterModel-->>AutoRegisterModel: _registry['foo'] = MyClass
-
-    User->>Models: Create model instance
-    Models->>AutoRegisterModel: MyClass(**kwargs)
-    AutoRegisterModel-->>User: instance
+```python
+from gnn_pde_v2.core import GraphsTuple, batch_graphs, unbatch_graphs
 ```
 
-## Import Graph (Simplified)
+### core/functional.py - Scatter Operations
+Thin wrappers with torch_scatter fallback to pure PyTorch.
 
-```mermaid
-graph TD
-    ROOT[__init__.py]
-
-    ROOT --> CORE[core/]
-    ROOT --> COMP[components/]
-    ROOT --> MODELS[models/]
-    ROOT --> CONV[convenient/]
-    ROOT --> UTILS[utils/]
-
-    CORE --> BASE[base.py]
-    CORE --> GRAPH[graph.py]
-    CORE --> MLP[mlp.py]
-    CORE --> FUNC[functional.py]
-    CORE --> REGISTRY[registry.py]
-
-    COMP --> INIT_COMP[__init__.py]
-    INIT_COMP --> ENC[encoders.py]
-    INIT_COMP --> PROC[processors.py]
-    INIT_COMP --> DEC[decoders.py]
-    INIT_COMP --> TRANS[transformer.py]
-    INIT_COMP --> SPECTRAL[spectral.py]
-    INIT_COMP --> LAYERS[layers.py]
-    INIT_COMP --> PROBE[probe.py]
-    INIT_COMP --> FOURIER[fourier_encoder.py]
-
-    MODELS --> INIT_MODELS[__init__.py]
-    INIT_MODELS --> EPD[encode_process_decode.py]
-    INIT_MODELS --> GNN[gnn_model.py]
-    INIT_MODELS --> FNO_M[fno_model.py]
-
-    CONV --> CONFIG[config.py]
-
-    %% Cross-layer imports (all clean now!)
-    GNN -->|imports| REGISTRY
-    FNO_M -->|imports| REGISTRY
-
-    style GNN fill:#a9e34b
-    style FNO_M fill:#a9e34b
-    style REGISTRY fill:#d0bfff
+```python
+from gnn_pde_v2.core import scatter_sum, scatter_mean, scatter_max, scatter_min
+from gnn_pde_v2.core import aggregate_edges, broadcast_nodes_to_edges
 ```
 
-## Key Architecture Decisions
+### core/aggregation.py - Aggregation Protocol
+Extensible aggregation system with pluggable reduction methods.
 
-### 1. Registry in Core Layer (RESOLVED)
-```mermaid
-graph TD
-    BASE[core.base.BaseModel<br/>marker class]
-    REGISTRY[core.registry.AutoRegisterModel<br/>registry mixin]
-
-    REGISTRY -->|extends| BASE
-    MODELS[models/ classes] -->|extend| REGISTRY
-
-    CONV_REEXPORT[convenient/__init__.py] -.->|re-exports| REGISTRY
-
-    style REGISTRY fill:#d0bfff
-    style BASE fill:#d0bfff
-    style CONV_REEXPORT fill:#ff922b,stroke-dasharray: 5 5
+```python
+from gnn_pde_v2.core import Aggregation, Sum, Mean, Max, Min, get_aggregation
 ```
 
-**Rationale**: Moving `AutoRegisterModel` to `core/` eliminates the layer violation where models had to import from `convenient/`.
+### core/protocols.py - Structural Protocols
+TypeScript-style structural protocols for component contracts.
 
-### 2. Spectral Components (RENAMED)
-```mermaid
-graph TD
-    subgraph "components/spectral.py (was fno.py)"
-        SPEC[SpectralConv]
-        FNO_B[FNOBlock]
-        AFNO_B[AFNOBlock]
-        FNOP[FNOProcessor]
-    end
-
-    FNO_MODEL[models.fno_model<br/>FNO, TFNO, AFNO] --> FNOP
-    FNO_MODEL --> SPEC
-
-    style SPEC fill:#a9e34b
-    style FNO_MODEL fill:#ffd43b
+```python
+from gnn_pde_v2.core.protocols import (
+    Modulation, ConditioningProtocol,
+    GraphEncoder, GraphProcessor, NodeDecoder, QueryDecoder, Decoder,
+    GraphModel, PositionEncoder, GridProcessor, GridModel
+)
 ```
 
-**Rationale**: Renamed `fno.py` to `spectral.py` to better reflect that it contains general spectral convolution components.
+## Components Layer
 
-### 3. FNO vs Graph Processor Mismatch
-```mermaid
-graph TD
-    subgraph "Graph Processors"
-        GNP[GraphNetProcessor<br/>forward: GraphsTuple → GraphsTuple]
-        TP[TransformerProcessor<br/>forward: GraphsTuple → GraphsTuple]
-    end
+### Processors (Graph-based)
+| Module | Description |
+|--------|-------------|
+| `MessagePassingBlock` | Abstract base for graph message passing |
+| `GraphNetBlock` | DeepMind-style node/edge update |
+| `EdgeConditionedConvBlock` | Edge-conditioned convolution |
+| `GENBlock` | Graph Edges Networks block |
+| `GlobalGraphNetBlock` | Full encoder-processor-decoder with globals |
+| `GCNBlock`, `GCNBlockWithEdgeFeatures` | Graph Convolutional Networks |
+| `TransformerBlock`, `TransformerProcessor` | Transformer for graphs |
 
-    subgraph "Grid Processors"
-        FNOP[FNOProcessor<br/>forward: Tensor → Tensor]
-        AFNOP[AFNOProcessor<br/>forward: Tensor → Tensor]
-    end
+### Attention Mechanisms
+| Module | Description |
+|--------|-------------|
+| `MultiHeadAttention` | Standard multi-head attention |
+| `PhysicsTokenAttention` | Token-based physics attention |
+| `PhysicsTokenAttentionV3` | Improved physics attention |
+| `QKNormMultiHeadAttention` | Attention with QK normalization |
+| `SparseGraphAttention` | Sparse attention for graphs |
+| `RelativePositionEncoding` | Relative position encoding |
 
-    style FNOP fill:#a9e34b
-    style AFNOP fill:#a9e34b
+### Conditioning
+| Module | Description |
+|--------|-------------|
+| `ZeroConditioning` | No conditioning (passthrough) |
+| `AdaLNConditioning`, `AdaLNConditioningNoGate` | Adaptive Layer Norm |
+| `DualAdaLNConditioning`, `DualAdaLNConditioningNoGate` | Dual AdaLN |
+| `FiLMConditioning` | Feature-wise Linear Modulation |
+
+### Temperature Mechanisms
+| Module | Description |
+|--------|-------------|
+| `FixedTemperature` | Fixed temperature scaling |
+| `LearnableScalarTemperature` | Learnable scalar temperature |
+| `PerHeadTemperature` | Per-head temperature |
+| `AdaptiveTemperature` | Adaptive temperature |
+| `AnnealedTemperature` | Annealed temperature |
+| `create_temperature_module` | Factory function |
+
+### Spectral (Grid-based)
+| Module | Description |
+|--------|-------------|
+| `SpectralConv` | Standard spectral convolution |
+| `SeparableSpectralConv` | Factorized spectral convolution |
+| `FNOBlock` | FNO block |
+| `AFNOBlock` | Adaptive FNO block |
+| `FNOProcessor` | Full FNO processor |
+
+### Decoders
+| Module | Description |
+|--------|-------------|
+| `MLPDecoder` | MLP-based node decoder |
+| `IndependentMLPDecoder` | Independent MLP decoder |
+| `ProbeDecoder` | Query-based decoder |
+| `WindFarmGNO` | Wind farm-specific GNO |
+
+## Models Layer
+
+### Lazy Loading
+Models use lazy loading for optional dependencies:
+
+```python
+from gnn_pde_v2.models import FNO, TFNO, AFNO, GraphNet, MeshGraphNet
+
+# These are lazily loaded - raises ImportError with helpful message if deps missing
 ```
 
-**Note**: Grid processors work on tensors directly, not GraphsTuple. This is intentional - use `FNO`/`TFNO`/`AFNO` models for grid-based data.
+### Registered Models
+| Name | Aliases | Type |
+|------|---------|------|
+| `graphnet` | gnn, graph_net | Graph |
+| `meshgraphnet` | mgn, mesh_graph_net | Graph |
+| `fno` | fourier_no, fno2d | Grid |
+| `tfno` | tensorized_fno | Grid |
+| `afno` | adaptive_fno | Grid |
 
-### 4. Optional Dependencies
+```python
+from gnn_pde_v2.core import MODEL_REGISTRY
+
+model = MODEL_REGISTRY.create('graphnet', node_in_dim=11, edge_in_dim=3, out_dim=3)
+```
+
+## Optional Dependencies
+
 ```mermaid
 graph LR
-    subgraph "Hard Dependencies"
-        TORCH[torch]
-        NUMPY[numpy]
-    end
+    TORCH[torch] --> HARD[Hard]
+    NUMPY[numpy] --> HARD
+    SCATTER[torch_scatter] -.-> OPT[Optional]
+    CLUSTER[torch_cluster] -.-> OPT
+    PYDANTIC[pydantic] -.-> OPT
 
-    subgraph "Optional Dependencies"
-        SCATTER[torch_scatter<br/>scatter functions]
-        CLUSTER[torch_cluster<br/>knn/radius graph]
-        PYDANTIC[pydantic<br/>config classes]
-    end
-
-    FUNC[core.functional] -.-> SCATTER
-    GRAPH_UTILS[utils.graph_utils] -.-> CLUSTER
-    CONFIG[convenient.config] -.-> PYDANTIC
-
-    style SCATTER fill:#ffe066,stroke-dasharray: 5 5
-    style CLUSTER fill:#ffe066,stroke-dasharray: 5 5
-    style PYDANTIC fill:#ffe066,stroke-dasharray: 5 5
+    style HARD fill:#d0bfff
+    style OPT fill:#ffe066,stroke-dasharray: 5 5
 ```
 
-**Fallbacks**:
-- `torch_scatter`: Pure PyTorch fallback in `core.functional`
-- `torch_cluster`: Required for `knn_graph`, `radius_graph` in utils
-- `pydantic`: Required for `convenient.config` classes
+| Package | Usage | Fallback |
+|---------|-------|----------|
+| `torch` | All | N/A |
+| `numpy` | Spectral ops | N/A |
+| `torch_scatter` | Fast scatter | Pure PyTorch |
+| `torch_cluster` | knn/radius graph | Required |
+| `pydantic` | Config (not used) | N/A |
+
+**Note**: `torch_cluster` is currently required for `knn_graph` and `radius_graph` in `utils.graph_utils`.
+
+## Import Reference
+
+### Package Root (`gnn_pde_v2`)
+```python
+from gnn_pde_v2 import GraphsTuple, BaseModel
+from gnn_pde_v2 import scatter_sum, scatter_mean, aggregate_edges
+```
+
+### Core (`gnn_pde_v2.core`)
+```python
+from gnn_pde_v2.core import (
+    GraphsTuple, batch_graphs, unbatch_graphs,
+    BaseModel, MLP, SinActivation,
+    AutoRegisterModel, MODEL_REGISTRY,
+    scatter_sum, scatter_mean, scatter_max, scatter_min, scatter_softmax,
+    aggregate_edges, broadcast_nodes_to_edges,
+    Aggregation, Sum, Mean, Max, Min, get_aggregation,
+    # Protocols
+    Modulation, ConditioningProtocol,
+    GraphEncoder, GraphProcessor, NodeDecoder, QueryDecoder, Decoder, GraphModel,
+    PositionEncoder, GridProcessor, GridModel,
+)
+```
+
+### Components (`gnn_pde_v2.components`)
+```python
+from gnn_pde_v2.components import (
+    # Encoders
+    FourierFeatureEncoder,
+    # Layers
+    Residual, GatedResidual, make_residual,
+    # Processors
+    MessagePassingBlock, GraphNetBlock, GraphNetProcessor,
+    EdgeConditionedConvBlock, EdgeConvBlock, GENBlock,
+    GlobalGraphNetBlock, GlobalGraphNetProcessor,
+    GCNBlock, GCNBlockWithEdgeFeatures,
+    TransformerBlock, TransformerProcessor,
+    # Attention
+    MultiHeadAttention, PhysicsTokenAttention, PhysicsTokenAttentionV3,
+    TiledSliceOperation, QKNormMultiHeadAttention, SparseGraphAttention,
+    RelativePositionEncoding,
+    # Conditioning
+    ZeroConditioning, AdaLNConditioning, AdaLNConditioningNoGate,
+    DualAdaLNConditioning, DualAdaLNConditioningNoGate,
+    FiLMConditioning, apply_modulation,
+    # Temperature
+    TemperatureBase, FixedTemperature, LearnableScalarTemperature,
+    PerHeadTemperature, AdaptiveTemperature, AnnealedTemperature,
+    create_temperature_module,
+    # Spectral
+    FNOProcessor, SpectralConv, SeparableSpectralConv, SpectralConvBase,
+    make_spectral_conv, SpectralBlockBase, FNOBlock, FNOMLPBlock, AFNOBlock,
+    # Decoders
+    MLPDecoder, IndependentMLPDecoder,
+    ProbeDecoder, WindFarmGNO, ProbeGraphBuilder,
+    # RBF
+    LearnableRBFEncoder, GaussianRBFEncoder,
+    # Protocols (re-exported)
+    GraphEncoder, GraphProcessor, NodeDecoder, QueryDecoder, Decoder, GraphModel,
+    PositionEncoder, GridProcessor, GridModel,
+)
+```
+
+### Models (`gnn_pde_v2.models`)
+```python
+from gnn_pde_v2.models import (
+    EncodeProcessDecode,
+    FNO, TFNO, AFNO,  # Lazy loaded
+    GraphNet, MeshGraphNet,  # Lazy loaded
+)
+```
+
+### Utils (`gnn_pde_v2.utils`)
+```python
+from gnn_pde_v2.utils import (
+    compute_edge_features, knn_graph, radius_graph,
+    grid_to_points, points_to_grid,
+)
+```
 
 ## Summary
 
 | Layer | Depends On | Status |
 |-------|------------|--------|
-| `core/` | torch, numpy | OK |
-| `components/` | core | OK |
-| `models/` | core, components | OK (clean!) |
-| `convenient/` | core, pydantic (optional) | OK |
-| `examples/` | all | OK (top level) |
-| `utils/` | core, torch_cluster (optional) | OK |
+| `core/` | torch, numpy | ✅ Clean |
+| `components/` | core | ✅ Clean |
+| `models/` | core, components | ✅ Clean |
+| `examples/` | all | ✅ Top-level |
+| `utils/` | core, torch_cluster (optional) | ✅ Clean |
 
-## Module Exports Reference
-
-### core/__init__.py
-- `GraphsTuple`, `batch_graphs`, `unbatch_graphs`
-- `BaseModel`
-- `scatter_sum`, `scatter_mean`, `scatter_max`, `scatter_min`, `scatter_softmax`
-- `aggregate_edges`, `broadcast_nodes_to_edges`
-- `MLP`, `SinActivation`
-- `AutoRegisterModel`
-
-### components/__init__.py
-- `FourierFeatureEncoder`
-- `Residual`, `GatedResidual`, `make_residual`
-- `MeshEncoder`
-- `GraphNetBlock`, `GraphNetProcessor`
-- `TransformerBlock`, `TransformerProcessor`, `MultiHeadAttention`, `PhysicsTokenAttention`
-- `Modulation`, `ConditioningProtocol`, `ZeroConditioning`, `AdaLNConditioning`, `DualAdaLNConditioning`, `FiLMConditioning`
-- `SpectralConv`, `FNOBlock`, `AFNOBlock`, `FNOProcessor`
-- `MLPDecoder`, `IndependentMLPDecoder`
-- `ProbeDecoder`, `ProbeMessagePassingLayer`
-
-### models/__init__.py
-- `EncodeProcessDecode`
-- `FNO`, `TFNO`, `AFNO`
-- `GraphNet`, `MeshGraphNet`
-
-### convenient/__init__.py
-- `AutoRegisterModel` (re-exported from core)
-- `ModelConfig`, `TrainingConfig`, `FNOConfig`, `GNNConfig`, `ExperimentConfig` (if pydantic available)
-
-### utils/__init__.py
-- `compute_edge_features`, `knn_graph`, `radius_graph`
-- `grid_to_points`, `points_to_grid`
+**Key Changes from v1**:
+- Registry moved from `convenient/` to `core/`
+- No `convenient/` layer exists
+- Added `core/aggregation.py` for pluggable aggregations
+- Added `components/temperature.py` for temperature mechanisms
+- Models use lazy loading pattern
+- Protocols defined in `core/protocols.py` and re-exported in components
