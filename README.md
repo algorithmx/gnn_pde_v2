@@ -40,7 +40,7 @@ gnn_pde_v2/
 ├── components/              # Reusable building blocks
 │   ├── layers.py            # Residual, GatedResidual, make_residual
 │   ├── encoders.py          # (legacy, use models.gnn_model.MeshEncoder)
-│   ├── processors.py        # GraphNetBlock, MessagePassingBlock, GENBlock
+│   ├── processors.py        # GraphNetBlock, MessagePassingBase, GENBlock
 │   ├── gcn.py               # GCNBlock, GCNBlockWithEdgeFeatures
 │   ├── transformer.py       # TransformerBlock, TransformerProcessor
 │   ├── attention.py         # MultiHeadAttention, PhysicsTokenAttention, etc.
@@ -204,7 +204,7 @@ output = model(graph)  # [10, 2]
 
 | Component | Description |
 |-----------|-------------|
-| `MessagePassingBlock` | Abstract base for graph message passing |
+| `MessagePassingBase` | Abstract base for graph message passing |
 | `GraphNetBlock` | DeepMind-style node/edge update |
 | `EdgeConditionedConvBlock` | Edge-conditioned convolution |
 | `EdgeConvBlock` | Edge convolution (PointNet-style) |

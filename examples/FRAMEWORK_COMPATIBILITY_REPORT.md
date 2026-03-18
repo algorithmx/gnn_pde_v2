@@ -208,7 +208,7 @@ This report analyzes all example scripts in the `examples/` folder against the `
 **Assessment:** ⚠️ **Medium Integration**
 - Uses framework pooling/unpooling but implements own message passing
 - Custom message passing is paper-specific (kernel networks)
-- Could potentially extend `MessagePassingBlock` for consistency
+- Could potentially extend `MessagePassingBase` for consistency
 
 **Opportunities:**
 - Consider contributing `KernelNetwork` pattern to framework if reusable
@@ -347,7 +347,7 @@ This report analyzes all example scripts in the `examples/` folder against the `
 | Enhancement | Target Component | Benefit |
 |-------------|------------------|---------|
 | `terminal_layer_norm` option | `GraphNetBlock` | Enable MeshGraphNets-style blocks |
-| Kernel network abstraction | `MessagePassingBlock` | Support MGKN-style operators |
+| Kernel network abstraction | `MessagePassingBase` | Support MGKN-style operators |
 | Padding utilities | `FNOProcessor` | Non-periodic boundary handling |
 
 ### 3. Documentation Improvements

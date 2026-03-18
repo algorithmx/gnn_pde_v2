@@ -55,8 +55,8 @@ class MLP(nn.Module):
         in_dim: Input dimension
         out_dim: Output dimension
         hidden_dims: List of hidden layer dimensions
-        activation: Hidden-layer activation spec. Can be: 'relu', 'gelu', 'silu', 
-            'tanh', 'sigmoid', 'sin', nn.Module, callable, or None.
+        activation: Hidden-layer activation spec. Can be: 'relu', 'gelu', 'silu',
+            'prelu', 'tanh', 'sigmoid', 'sin', nn.Module, callable, or None.
         dropout: Hidden-layer dropout spec (float or sequence of floats)
         norm: Hidden-layer normalization spec. Can be:
             - None: no normalization
@@ -238,6 +238,7 @@ class MLP(nn.Module):
                 'relu': nn.ReLU,
                 'gelu': nn.GELU,
                 'silu': nn.SiLU,
+                'prelu': nn.PReLU,
                 'tanh': nn.Tanh,
                 'sigmoid': nn.Sigmoid,
                 'sin': SinActivation,

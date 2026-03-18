@@ -14,9 +14,13 @@ from gnn_pde_v2.core import MLP
 from functools import partial
 from gnn_pde_v2.components import (
     Residual,
-    MessagePassingBlock,
+    MessagePassingBase,
     GraphNetBlock, GraphNetProcessor,
     EdgeConditionedConvBlock,
+    FullEdgeMessageProcessor,
+    VectorEdgeMessageProcessor,
+    ScalarEdgeMessageProcessor,
+    LowRankEdgeMessageProcessor,
     EdgeConvBlock,
     GENBlock,
     GlobalGraphNetBlock, GlobalGraphNetProcessor,
@@ -25,6 +29,7 @@ from gnn_pde_v2.components import (
     LearnableRBFEncoder,
     MultiHeadAttention, TransformerBlock, TransformerProcessor,
 )
+from gnn_pde_v2.core.protocols import EdgeMessageProcessor
 
 
 class TestMLP:
@@ -50,11 +55,28 @@ class TestMLP:
     
     def test_different_activations(self, device):
         """Test different activation functions."""
-        for act in ['relu', 'gelu', 'silu', 'tanh', 'sigmoid', 'sin']:
+        for act in ['relu', 'gelu', 'silu', 'prelu', 'tanh', 'sigmoid', 'sin']:
             mlp = MLP(10, 5, [10], activation=act).to(device)
             x = torch.randn(3, 10, device=device)
             out = mlp(x)
             assert out.shape == (3, 5)
+
+    def test_prelu_string_creates_prelu_modules(self, device):
+        """Test that string PReLU is supported across MLP activation hooks."""
+        mlp = MLP(
+            10, 5, [12],
+            activation='prelu',
+            final_activation='prelu',
+            pre_activation='prelu',
+            use_layer_norm=False,
+        ).to(device)
+
+        x = torch.randn(3, 10, device=device)
+        out = mlp(x)
+
+        prelus = [m for m in mlp.modules() if isinstance(m, nn.PReLU)]
+        assert out.shape == (3, 5)
+        assert len(prelus) == 3
     
     def test_dropout(self, device):
         """Test dropout."""
@@ -354,15 +376,15 @@ class TestGraphNetBlock:
 
 
 class TestMessagePassingBlock:
-    """Test MessagePassingBlock ABC contract."""
+    """Test MessagePassingBase ABC contract."""
 
     def test_graphnetblock_is_subclass(self):
-        """GraphNetBlock must be a MessagePassingBlock subclass."""
-        assert issubclass(GraphNetBlock, MessagePassingBlock)
+        """GraphNetBlock must be a MessagePassingBase subclass."""
+        assert issubclass(GraphNetBlock, MessagePassingBase)
 
     def test_edgeconditioned_is_subclass(self):
-        """EdgeConditionedConvBlock must be a MessagePassingBlock subclass."""
-        assert issubclass(EdgeConditionedConvBlock, MessagePassingBlock)
+        """EdgeConditionedConvBlock must be a MessagePassingBase subclass."""
+        assert issubclass(EdgeConditionedConvBlock, MessagePassingBase)
 
     def test_updates_edges_attr(self):
         """Check updates_edges class attribute."""
@@ -370,13 +392,26 @@ class TestMessagePassingBlock:
         assert EdgeConditionedConvBlock.updates_edges is False
 
     def test_cannot_instantiate_abc(self):
-        """MessagePassingBlock is abstract and cannot be instantiated directly."""
+        """MessagePassingBase is abstract and cannot be instantiated directly."""
         with pytest.raises(TypeError):
-            MessagePassingBlock(latent_dim=8)
+            MessagePassingBase(latent_dim=8)
 
 
 class TestEdgeConditionedConvBlock:
     """Test EdgeConditionedConvBlock (NNConv-style)."""
+
+    @staticmethod
+    def _ewn(edge_latent_dim: int, processor=None, latent_dim: int = 16):
+        """Build a default edge_weight_net for testing."""
+        if processor is None:
+            processor = FullEdgeMessageProcessor(latent_dim)
+        return MLP(
+            in_dim=edge_latent_dim,
+            out_dim=processor.weight_out_dim,
+            hidden_dims=[128],
+            activation='relu',
+            use_layer_norm=False,
+        )
 
     def _make_graph(self, device, latent=16, edge_latent=16, n_nodes=5, n_edges=8):
         return GraphsTuple.from_flat(
@@ -392,7 +427,7 @@ class TestEdgeConditionedConvBlock:
         """Test forward with full weight matrix."""
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=16,
-            edge_weight_type='full',
+            edge_weight_net=self._ewn(16),
         ).to(device)
         graph = self._make_graph(device)
         out = block(graph)
@@ -402,27 +437,33 @@ class TestEdgeConditionedConvBlock:
 
     def test_forward_vector(self, device):
         """Test forward with per-channel vector gating."""
+        proc = VectorEdgeMessageProcessor(16)
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=16,
-            edge_weight_type='vector',
+            edge_weight_net=self._ewn(16, proc),
+            edge_processor=proc,
         ).to(device)
         out = block(self._make_graph(device))
         assert out.nodes.shape == (5, 16)
 
     def test_forward_scalar(self, device):
         """Test forward with scalar gating."""
+        proc = ScalarEdgeMessageProcessor(16)
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=16,
-            edge_weight_type='scalar',
+            edge_weight_net=self._ewn(16, proc),
+            edge_processor=proc,
         ).to(device)
         out = block(self._make_graph(device))
         assert out.nodes.shape == (5, 16)
 
     def test_mean_aggregation(self, device):
         """Test with mean aggregation (used by Graph-PDE GNO)."""
+        proc = ScalarEdgeMessageProcessor(16)
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=16,
-            edge_weight_type='scalar', aggregate='mean',
+            edge_weight_net=self._ewn(16, proc),
+            edge_processor=proc, aggregate='mean',
         ).to(device)
         out = block(self._make_graph(device))
         assert out.nodes.shape == (5, 16)
@@ -431,43 +472,195 @@ class TestEdgeConditionedConvBlock:
         """Test with root_weight=False and bias=False."""
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=16,
+            edge_weight_net=self._ewn(16),
             root_weight=False, bias=False,
         ).to(device)
-        assert block.root is None
-        assert block.bias is None
+        assert block.node_updater.root is None
+        assert block.node_updater.bias is None
         out = block(self._make_graph(device))
         assert out.nodes.shape == (5, 16)
 
     def test_different_edge_dim(self, device):
         """Test with edge_latent_dim != latent_dim."""
+        proc = ScalarEdgeMessageProcessor(16)
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=8,
-            edge_weight_type='scalar',
+            edge_weight_net=self._ewn(8, proc),
+            edge_processor=proc,
         ).to(device)
         graph = self._make_graph(device, edge_latent=8)
         out = block(graph)
         assert out.nodes.shape == (5, 16)
 
-    def test_invalid_weight_type_raises(self, device):
-        """Unknown edge_weight_type should raise ValueError."""
-        with pytest.raises(ValueError, match="Unknown edge_weight_type"):
+    def test_default_processor_is_full_rank(self, device):
+        """Default configuration should resolve to the original full-rank behavior."""
+        block = EdgeConditionedConvBlock(
+            latent_dim=16, edge_latent_dim=16,
+            edge_weight_net=self._ewn(16),
+        ).to(device)
+        assert isinstance(block.edge_processor, FullEdgeMessageProcessor)
+        out = block(self._make_graph(device))
+        assert out.nodes.shape == (5, 16)
+
+    def test_edge_message_processor_protocol_is_runtime_checkable(self):
+        """Built-in processors should satisfy the EdgeMessageProcessor protocol."""
+        assert hasattr(EdgeMessageProcessor, '_is_protocol')
+        assert isinstance(FullEdgeMessageProcessor(8), EdgeMessageProcessor)
+        assert isinstance(VectorEdgeMessageProcessor(8), EdgeMessageProcessor)
+        assert isinstance(ScalarEdgeMessageProcessor(8), EdgeMessageProcessor)
+        assert isinstance(LowRankEdgeMessageProcessor(8, 2), EdgeMessageProcessor)
+
+    @pytest.mark.parametrize(
+        "processor_factory",
+        [
+            lambda d: FullEdgeMessageProcessor(d),
+            lambda d: VectorEdgeMessageProcessor(d),
+            lambda d: ScalarEdgeMessageProcessor(d),
+            lambda d: LowRankEdgeMessageProcessor(d, 4),
+        ],
+    )
+    def test_plugin_roundtrip_equivalence(self, device, processor_factory):
+        """An explicit processor should survive state_dict round-trips exactly."""
+        proc_ref = processor_factory(16)
+        proc_plug = processor_factory(16)
+        reference = EdgeConditionedConvBlock(
+            latent_dim=16,
+            edge_latent_dim=16,
+            edge_weight_net=self._ewn(16, proc_ref),
+            root_weight=True,
+            bias=True,
+            edge_processor=proc_ref,
+        ).to(device)
+        plugin = EdgeConditionedConvBlock(
+            latent_dim=16,
+            edge_latent_dim=16,
+            edge_weight_net=self._ewn(16, proc_plug),
+            root_weight=True,
+            bias=True,
+            edge_processor=proc_plug,
+        ).to(device)
+        plugin.load_state_dict(reference.state_dict())
+
+        graph = self._make_graph(device)
+        reference_out = reference(graph)
+        plugin_out = plugin(graph)
+
+        assert torch.allclose(plugin_out.nodes, reference_out.nodes)
+        assert plugin_out.edges is graph.edges
+
+    def test_default_equivalent_to_explicit_full_processor(self, device):
+        """The default block must remain exactly equivalent to explicit full-rank selection."""
+        ewn1 = self._ewn(16)
+        ewn2 = self._ewn(16)
+        default_block = EdgeConditionedConvBlock(
+            latent_dim=16,
+            edge_latent_dim=16,
+            edge_weight_net=ewn1,
+            root_weight=True,
+            bias=True,
+        ).to(device)
+        explicit_block = EdgeConditionedConvBlock(
+            latent_dim=16,
+            edge_latent_dim=16,
+            edge_weight_net=ewn2,
+            root_weight=True,
+            bias=True,
+            edge_processor=FullEdgeMessageProcessor(16),
+        ).to(device)
+        explicit_block.load_state_dict(default_block.state_dict())
+
+        graph = self._make_graph(device)
+        default_out = default_block(graph)
+        explicit_out = explicit_block(graph)
+
+        assert torch.allclose(default_out.nodes, explicit_out.nodes)
+        assert torch.equal(default_out.edges, explicit_out.edges)
+
+    def test_rejects_non_module_edge_processor(self):
+        """Custom edge processors must be nn.Module instances."""
+
+        class CallableOnly:
+            @property
+            def weight_out_dim(self):
+                return 16
+
+            def forward(self, src_x, edge_weights):
+                return src_x * edge_weights
+
+        with pytest.raises(TypeError, match="edge_processor must be an nn.Module"):
             EdgeConditionedConvBlock(
-                latent_dim=16, edge_latent_dim=16,
-                edge_weight_type='invalid',
+                latent_dim=16,
+                edge_latent_dim=16,
+                edge_weight_net=self._ewn(16),
+                edge_processor=CallableOnly(),
+            )
+
+    def test_rejects_protocol_violation(self):
+        """Custom edge processors must satisfy the EdgeMessageProcessor protocol."""
+
+        class MissingWeightOutDim(nn.Module):
+            latent_dim = 16
+
+            def forward(self, src_x, edge_weights):
+                return src_x
+
+        with pytest.raises(TypeError, match="must satisfy EdgeMessageProcessor protocol"):
+            EdgeConditionedConvBlock(
+                latent_dim=16,
+                edge_latent_dim=16,
+                edge_weight_net=self._ewn(16),
+                edge_processor=MissingWeightOutDim(),
+            )
+
+    def test_rejects_processor_latent_dim_mismatch(self):
+        """Injected processors must agree with the block latent_dim."""
+        with pytest.raises(ValueError, match="edge_processor latent_dim must match block latent_dim"):
+            proc = VectorEdgeMessageProcessor(8)
+            EdgeConditionedConvBlock(
+                latent_dim=16,
+                edge_latent_dim=16,
+                edge_weight_net=self._ewn(16, proc),
+                edge_processor=proc,
+            )
+
+    def test_construction_time_shape_check_for_custom_processor_output(self, device):
+        """Malformed custom processors should fail during pipeline verification."""
+
+        class BadShapeProcessor(nn.Module):
+            def __init__(self):
+                super().__init__()
+                self.latent_dim = 16
+
+            @property
+            def weight_out_dim(self):
+                return 16
+
+            def forward(self, src_x, edge_weights):
+                return edge_weights[:, :5]
+
+        with pytest.raises(ValueError, match="edge message pipeline must return shape"):
+            proc = BadShapeProcessor()
+            EdgeConditionedConvBlock(
+                latent_dim=16,
+                edge_latent_dim=16,
+                edge_weight_net=self._ewn(16, proc),
+                edge_processor=proc,
             )
 
     def test_gradient_flow(self, device):
         """Gradients must flow through edge_weight_net, root, and bias."""
+        proc = VectorEdgeMessageProcessor(8)
         block = EdgeConditionedConvBlock(
             latent_dim=8, edge_latent_dim=8,
-            edge_weight_type='vector',
+            edge_weight_net=self._ewn(8, proc, latent_dim=8),
+            edge_processor=proc,
         ).to(device)
         graph = self._make_graph(device, latent=8, edge_latent=8, n_nodes=4, n_edges=6)
         out = block(graph)
         loss = out.nodes.sum()
         loss.backward()
-        assert block.root.grad is not None
-        assert block.bias.grad is not None
+        assert block.node_updater.root.grad is not None
+        assert block.node_updater.bias.grad is not None
 
     # -------------------------------------------------------------------------
     # Low-Rank Approximation Tests
@@ -475,9 +668,11 @@ class TestEdgeConditionedConvBlock:
 
     def test_forward_low_rank(self, device):
         """Test forward with symmetric low-rank approximation."""
+        proc = LowRankEdgeMessageProcessor(16, 4)
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=16,
-            edge_weight_type='low_rank', low_rank=4,
+            edge_weight_net=self._ewn(16, proc),
+            edge_processor=proc,
         ).to(device)
         graph = self._make_graph(device)
         out = block(graph)
@@ -490,14 +685,18 @@ class TestEdgeConditionedConvBlock:
         d = 64
         r = 8
         
+        full_proc = FullEdgeMessageProcessor(d)
         block_full = EdgeConditionedConvBlock(
             latent_dim=d, edge_latent_dim=16,
-            edge_weight_type='full', root_weight=False, bias=False,
+            edge_weight_net=self._ewn(16, full_proc, latent_dim=d),
+            root_weight=False, bias=False,
         ).to(device)
         
+        lr_proc = LowRankEdgeMessageProcessor(d, r)
         block_lowrank = EdgeConditionedConvBlock(
             latent_dim=d, edge_latent_dim=16,
-            edge_weight_type='low_rank', low_rank=r,
+            edge_weight_net=self._ewn(16, lr_proc, latent_dim=d),
+            edge_processor=lr_proc,
             root_weight=False, bias=False,
         ).to(device)
         
@@ -526,23 +725,19 @@ class TestEdgeConditionedConvBlock:
         """Test that invalid low_rank values raise ValueError."""
         # rank = 0 should raise error
         with pytest.raises(ValueError, match="low_rank must be positive"):
-            EdgeConditionedConvBlock(
-                latent_dim=16, edge_latent_dim=16,
-                edge_weight_type='low_rank', low_rank=0,
-            )
+            LowRankEdgeMessageProcessor(16, 0)
         
         # rank > latent_dim should raise error
         with pytest.raises(ValueError, match="low_rank .* must be <= latent_dim"):
-            EdgeConditionedConvBlock(
-                latent_dim=16, edge_latent_dim=16,
-                edge_weight_type='low_rank', low_rank=32,
-            )
+            LowRankEdgeMessageProcessor(16, 32)
 
     def test_low_rank_gradient_flow(self, device):
         """Test gradients flow correctly in low-rank mode."""
+        proc = LowRankEdgeMessageProcessor(16, 4)
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=16,
-            edge_weight_type='low_rank', low_rank=4,
+            edge_weight_net=self._ewn(16, proc),
+            edge_processor=proc,
         ).to(device)
         
         graph = self._make_graph(device, latent=16, edge_latent=16, n_nodes=4, n_edges=6)
@@ -555,14 +750,16 @@ class TestEdgeConditionedConvBlock:
         assert has_grad, "Edge weight net should have gradients"
         
         # Check root and bias gradients
-        assert block.root.grad is not None
-        assert block.bias.grad is not None
+        assert block.node_updater.root.grad is not None
+        assert block.node_updater.bias.grad is not None
 
     def test_low_rank_equivalence_with_same_weights(self, device):
         """Test that low-rank produces correct output shapes and valid values."""
+        proc = LowRankEdgeMessageProcessor(32, 8)
         block = EdgeConditionedConvBlock(
             latent_dim=32, edge_latent_dim=16,
-            edge_weight_type='low_rank', low_rank=8,
+            edge_weight_net=self._ewn(16, proc, latent_dim=32),
+            edge_processor=proc,
             root_weight=False, bias=False,
         ).to(device)
         
@@ -582,9 +779,11 @@ class TestEdgeConditionedConvBlock:
         latent_dim = 64
         
         for rank in [4, 8, 16, 32]:
+            proc = LowRankEdgeMessageProcessor(latent_dim, rank)
             block = EdgeConditionedConvBlock(
                 latent_dim=latent_dim, edge_latent_dim=16,
-                edge_weight_type='low_rank', low_rank=rank,
+                edge_weight_net=self._ewn(16, proc, latent_dim=latent_dim),
+                edge_processor=proc,
             ).to(device)
             
             graph = self._make_graph(device, latent=latent_dim, edge_latent=16)
@@ -594,14 +793,16 @@ class TestEdgeConditionedConvBlock:
 
     def test_low_rank_no_root_no_bias(self, device):
         """Test low-rank with root_weight=False and bias=False."""
+        proc = LowRankEdgeMessageProcessor(16, 4)
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=16,
-            edge_weight_type='low_rank', low_rank=4,
+            edge_weight_net=self._ewn(16, proc),
+            edge_processor=proc,
             root_weight=False, bias=False,
         ).to(device)
         
-        assert block.root is None
-        assert block.bias is None
+        assert block.node_updater.root is None
+        assert block.node_updater.bias is None
         
         graph = self._make_graph(device)
         out = block(graph)
@@ -609,9 +810,11 @@ class TestEdgeConditionedConvBlock:
 
     def test_low_rank_mean_aggregation(self, device):
         """Test low-rank with mean aggregation."""
+        proc = LowRankEdgeMessageProcessor(16, 4)
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=16,
-            edge_weight_type='low_rank', low_rank=4,
+            edge_weight_net=self._ewn(16, proc),
+            edge_processor=proc,
             aggregate='mean',
         ).to(device)
         
@@ -626,12 +829,15 @@ class TestEdgeConditionedConvBlock:
         
         block_full = EdgeConditionedConvBlock(
             latent_dim=latent_dim, edge_latent_dim=edge_latent_dim,
-            edge_weight_type='full', root_weight=False, bias=False,
+            edge_weight_net=self._ewn(edge_latent_dim, latent_dim=latent_dim),
+            root_weight=False, bias=False,
         ).to(device)
         
+        lr_proc = LowRankEdgeMessageProcessor(latent_dim, 8)
         block_lowrank = EdgeConditionedConvBlock(
             latent_dim=latent_dim, edge_latent_dim=edge_latent_dim,
-            edge_weight_type='low_rank', low_rank=8,
+            edge_weight_net=self._ewn(edge_latent_dim, lr_proc, latent_dim=latent_dim),
+            edge_processor=lr_proc,
             root_weight=False, bias=False,
         ).to(device)
         
@@ -650,11 +856,16 @@ class TestGraphNetProcessorBlockFactory:
 
     def test_with_edge_conditioned_blocks(self, device):
         """Processor with EdgeConditionedConvBlock via block_factory."""
-        factory = partial(
-            EdgeConditionedConvBlock,
-            latent_dim=16, edge_latent_dim=16,
-            edge_weight_type='scalar', aggregate='mean',
-        )
+        def factory():
+            proc = ScalarEdgeMessageProcessor(16)
+            return EdgeConditionedConvBlock(
+                latent_dim=16, edge_latent_dim=16,
+                edge_weight_net=MLP(
+                    in_dim=16, out_dim=proc.weight_out_dim,
+                    hidden_dims=[128], activation='relu', use_layer_norm=False,
+                ),
+                edge_processor=proc, aggregate='mean',
+            )
         processor = GraphNetProcessor(
             latent_dim=16, n_layers=3,
             block_factory=factory,
@@ -676,11 +887,16 @@ class TestGraphNetProcessorBlockFactory:
 
     def test_no_residual_with_factory(self, device):
         """Non-residual mode with custom block_factory."""
-        factory = partial(
-            EdgeConditionedConvBlock,
-            latent_dim=8, edge_latent_dim=8,
-            edge_weight_type='scalar',
-        )
+        def factory():
+            proc = ScalarEdgeMessageProcessor(8)
+            return EdgeConditionedConvBlock(
+                latent_dim=8, edge_latent_dim=8,
+                edge_weight_net=MLP(
+                    in_dim=8, out_dim=proc.weight_out_dim,
+                    hidden_dims=[128], activation='relu', use_layer_norm=False,
+                ),
+                edge_processor=proc,
+            )
         processor = GraphNetProcessor(
             latent_dim=8, n_layers=2, residual=False,
             block_factory=factory,
@@ -739,18 +955,8 @@ class TestEdgeConvBlock:
         assert block.updates_edges is False
 
     def test_is_subclass_of_message_passing_block(self, device):
-        """EdgeConvBlock must be a MessagePassingBlock subclass."""
-        assert issubclass(EdgeConvBlock, MessagePassingBlock)
-
-    def test_backward_compat_aggregate_fn(self, device):
-        """Legacy aggregate_fn still works."""
-        def custom_sum(messages, receivers, num_nodes):
-            return aggregate_edges(messages, receivers, num_nodes, 'sum')
-        
-        block = EdgeConvBlock(latent_dim=16, aggregate_fn=custom_sum).to(device)
-        graph = self._make_graph(device)
-        out = block(graph)
-        assert out.nodes.shape == (5, 16)
+        """EdgeConvBlock must be a MessagePassingBase subclass."""
+        assert issubclass(EdgeConvBlock, MessagePassingBase)
 
 
 class TestGlobalGraphNetBlock:
@@ -1529,7 +1735,7 @@ class TestGetAggregation:
 
 
 class TestAggregationInMessagePassingBlock:
-    """Test Aggregation integration with MessagePassingBlock."""
+    """Test Aggregation integration with MessagePassingBase."""
 
     def _make_graph(self, device):
         return GraphsTuple.from_flat(
@@ -1569,31 +1775,9 @@ class TestAggregationInMessagePassingBlock:
         out = block(graph)
         assert out.nodes.shape == (5, 16)
 
-    def test_backward_compat_aggregate_fn(self, device):
-        """Legacy aggregate_fn still works."""
-        def custom_agg(messages, receivers, num_nodes):
-            return aggregate_edges(messages, receivers, num_nodes, 'sum')
-        
-        block = GraphNetBlock(latent_dim=16, aggregate_fn=custom_agg).to(device)
-        graph = self._make_graph(device)
-        out = block(graph)
-        assert out.nodes.shape == (5, 16)
-
-    def test_backward_compat_string_literal(self, device):
-        """Legacy aggregate='sum' still works."""
+    def test_aggregate_with_string_literal(self, device):
+        """aggregate='sum' works."""
         block = GraphNetBlock(latent_dim=16, aggregate='sum').to(device)
-        graph = self._make_graph(device)
-        out = block(graph)
-        assert out.nodes.shape == (5, 16)
-
-    def test_aggregate_fn_overrides_aggregate(self, device):
-        """aggregate_fn (deprecated) takes precedence over aggregate."""
-        # aggregate_fn should win (legacy behavior)
-        def custom_max(messages, receivers, num_nodes):
-            return aggregate_edges(messages, receivers, num_nodes, 'max')
-        
-        block = GraphNetBlock(latent_dim=16, aggregate='sum', aggregate_fn=custom_max).to(device)
-        # Should use aggregate_fn (max), not aggregate (sum)
         graph = self._make_graph(device)
         out = block(graph)
         assert out.nodes.shape == (5, 16)

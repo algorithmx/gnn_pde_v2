@@ -5,6 +5,44 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+
+## [2.8.4] - 2026-03-18
+
+### Composable Processor Architecture
+
+**Breaking Renames**:
+- `MessagePassingBlock` → `MessagePassingBase` (`components/processors.py`)
+
+**New Node Update Strategies** (`components/node_updaters.py`):
+- `ConcatMLPNodeUpdater`: Classic Graph Nets style `[v_i; a_i]` → MLP
+- `RootWeightNodeUpdater`: Affine update `a_i + v_i @ W + b`
+- `PassThroughNodeUpdater`: Direct message pass-through (for EdgeConv)
+- `ResidualMLPNodeUpdater`: Residual add then MLP with optional message normalization
+- Factory functions: `concat_mlp_factory`, `root_weight_factory`, `pass_through_factory`, `residual_mlp_factory`
+
+**New Edge Message Processors** (`components/edge_processors.py`):
+- `FullEdgeMessageProcessor`: Per-edge `[H, H]` weight matrices
+- `VectorEdgeMessageProcessor`: Channel-wise vector gating
+- `ScalarEdgeMessageProcessor`: Scalar gating (most efficient)
+- `LowRankEdgeMessageProcessor`: Symmetric low-rank `U U^T` transform
+
+**New Protocols** (`core/protocols.py`):
+- `NodeUpdateStrategy`: Protocol for composable node-update strategies
+- `EdgeMessageProcessor`: Protocol for edge-conditioned message transforms
+
+**Refactored Blocks**:
+- `MessagePassingBase`: Now uses composable `node_updater` parameter; `forward()` and `update_nodes()` marked final
+- `GraphNetBlock`: Uses `ConcatMLPNodeUpdater` via factory
+- `EdgeConditionedConvBlock`: Now accepts pluggable `edge_processor` and `edge_weight_net`; uses `RootWeightNodeUpdater` via factory
+- `EdgeConvBlock`: Uses `PassThroughNodeUpdater` via factory
+- `GENBlock`: Uses `ResidualMLPNodeUpdater` via factory
+
+**Cleanup**:
+- Removed deprecated `aggregate_fn` parameter from all blocks (use `aggregate`)
+- `GraphUNetProcessor`: Removed unused `aggregate_fn` parameter
+- Updated all examples and tests to use new API
+
+
 ## [2.8.3] - 2026-03-18
 
 ### Low-Rank Edge-Conditioned Convolution
@@ -138,7 +176,7 @@ Jump to next version..
   - `EdgeConvBlock`: DGCNN-style edge convolution with max/sum/mean aggregation
   - `GCNBlock`: Basic Graph Convolutional Network block
   - `GCNBlockWithEdgeFeatures`: GCN variant with edge feature conditioning
-  - All blocks implement the `MessagePassingBlock` protocol
+  - All blocks implement the `MessagePassingBase` protocol
 
 - **New `core/aggregation.py` module** — Aggregation protocol and implementations:
   - `Aggregation` protocol (runtime-checkable)
@@ -197,7 +235,7 @@ Application driven design evolutions.
 ### New Features
 - New `components/attention.py` module with QK-normalized attention and sparse graph attention variants
 - New `components/conditioning.py` module with `AdaLNConditioningNoGate`, `DualAdaLNConditioningNoGate`, and `apply_modulation` helper
-- New `MessagePassingBlock` abstract base class for extensible message-passing blocks
+- New `MessagePassingBase` abstract base class for extensible message-passing blocks
 - New `EdgeConditionedConvBlock` for NNConv-style edge-conditioned convolution
 - `GraphNetProcessor` now supports custom block factories via `block_factory` parameter
 - `EncodeProcessDecode` now dispatches to `NodeDecoder` or `QueryDecoder` at runtime

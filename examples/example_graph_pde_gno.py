@@ -29,7 +29,7 @@ from typing import Optional, Tuple
 from gnn_pde_v2.core.graph import GraphsTuple
 from gnn_pde_v2.core import AutoRegisterModel
 from gnn_pde_v2.core import MLP
-from gnn_pde_v2.components import EdgeConditionedConvBlock
+from gnn_pde_v2.components import EdgeConditionedConvBlock, ScalarEdgeMessageProcessor
 
 
 class GraphPDE_GNO(AutoRegisterModel, name='graph_pde_gno', namespace='example'):
@@ -66,7 +66,6 @@ class GraphPDE_GNO(AutoRegisterModel, name='graph_pde_gno', namespace='example')
         output_size: int,
         hidden_size: int = 128,
         num_layers: int = 6,
-        edge_weight_type: str = 'scalar',
     ):
         super().__init__()
         
@@ -75,8 +74,6 @@ class GraphPDE_GNO(AutoRegisterModel, name='graph_pde_gno', namespace='example')
         self.output_size = output_size
         self.hidden_size = hidden_size
         self.num_layers = num_layers
-        self.edge_weight_type = edge_weight_type
-        
         # ==================== Encoders using framework components ====================
         
         # Node encoder using framework's MLP
@@ -100,20 +97,25 @@ class GraphPDE_GNO(AutoRegisterModel, name='graph_pde_gno', namespace='example')
         # ==================== Processor ====================
         
         # Stack of edge-conditioned convolution blocks (NNConv-style)
-        # Uses the framework's EdgeConditionedConvBlock (MessagePassingBlock subclass)
-        self.processor = nn.ModuleList([
-            EdgeConditionedConvBlock(
+        # Uses the framework's EdgeConditionedConvBlock (MessagePassingBase subclass)
+        self.processor = nn.ModuleList()
+        for _ in range(num_layers):
+            edge_proc = ScalarEdgeMessageProcessor(hidden_size)
+            self.processor.append(EdgeConditionedConvBlock(
                 latent_dim=hidden_size,
                 edge_latent_dim=hidden_size,
-                hidden_dim=hidden_size,
-                edge_weight_type=edge_weight_type,
+                edge_weight_net=MLP(
+                    in_dim=hidden_size,
+                    out_dim=edge_proc.weight_out_dim,
+                    hidden_dims=[hidden_size],
+                    activation='relu',
+                    use_layer_norm=False,
+                ),
+                edge_processor=edge_proc,
                 aggregate='mean',
                 root_weight=True,
                 bias=True,
-                activation='relu',
-            )
-            for _ in range(num_layers)
-        ])
+            ))
         
         # ==================== Decoder using framework component ====================
         
@@ -300,7 +302,6 @@ def example_usage():
         output_size=1,
         hidden_size=128,
         num_layers=6,
-        edge_weight_type='scalar',
     )
     
     # Example: Irregular mesh
@@ -322,7 +323,7 @@ def example_usage():
     print(f"\nModel Configuration:")
     print(f"  Hidden size: {model.hidden_size}")
     print(f"  Number of layers: {model.num_layers}")
-    print(f"  Edge weight type: {model.edge_weight_type}")
+    print("  Edge processor: ScalarEdgeMessageProcessor")
     print(f"  Total parameters: {sum(p.numel() for p in model.parameters()):,}")
     
     print(f"\nInput/Output:")

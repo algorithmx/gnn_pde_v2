@@ -3,7 +3,7 @@ GraphNet processors: DeepMind-style and edge-conditioned message passing.
 
 Two independent block families reflect distinct use cases:
 
-- ``MessagePassingBlock`` subclasses (``GraphNetBlock``,
+- ``MessagePassingBase`` subclasses (``GraphNetBlock``,
   ``EdgeConditionedConvBlock``):
     Node/edge message passing without explicit globals.
 
@@ -12,32 +12,68 @@ Two independent block families reflect distinct use cases:
     participant.
 
 ``GlobalGraphNetBlock`` is intentionally not derived from
-``MessagePassingBlock`` because it performs a 3-step update
+``MessagePassingBase`` because it performs a 3-step update
 (edge → node → global) rather than the base 2-step template.
 """
 
 from abc import ABC, abstractmethod
-from typing import Callable, Literal, Optional, Tuple, Union
+from typing import Callable, final, Final, Literal, Optional, Tuple, Union
 
 import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
 
 from ..core.graph import GraphsTuple
-from ..core.functional import aggregate_edges, broadcast_global, aggregate_to_global
+from ..core.functional import aggregate_edges, broadcast_global, aggregate_to_global, scatter_softmax
 from ..core.mlp import MLP
 from ..core.aggregation import Aggregation, Sum, get_aggregation
+from ..core.protocols import EdgeMessageProcessor
+from .edge_processors import (
+    _EdgeMessageProcessorBase,
+    FullEdgeMessageProcessor,
+    VectorEdgeMessageProcessor,
+    ScalarEdgeMessageProcessor,
+    LowRankEdgeMessageProcessor,
+    _default_edge_message_processor,
+)
+from .node_updaters import (
+    _NodeUpdaterBase,
+    ConcatMLPNodeUpdater,
+    RootWeightNodeUpdater,
+    PassThroughNodeUpdater,
+    ResidualMLPNodeUpdater,
+    _default_node_updater,
+)
+from .node_updaters import (
+    concat_mlp_factory,
+    root_weight_factory,
+    pass_through_factory,
+    residual_mlp_factory,
+)
 
 
 # ---------------------------------------------------------------------------
-# Node/edge-only blocks
+# Exported symbols
 # ---------------------------------------------------------------------------
-class MessagePassingBlock(ABC, nn.Module):
+
+__all__ = [
+    # Base classes and protocols
+    "MessagePassingBase",
+    # GraphNet-style blocks
+    "GraphNetBlock",
+    "EdgeConditionedConvBlock",
+    "EdgeConvBlock",
+    "GENBlock",
+    "GlobalGraphNetBlock",
+    "GlobalGraphNetProcessor",
+]
+
+class MessagePassingBase(ABC, nn.Module):
     """
     Abstract base class for graph message passing.
     
     FRAMEWORK CONSTRAINS (cannot be changed by subclasses):
-    - Aggregation: MUST use Aggregation Protocol via self._aggregate_fn
+    - Aggregation: MUST use Aggregation Protocol via self.aggregate_fn
     - Input: GraphsTuple with nodes, edges, senders, receivers
     - Output: GraphsTuple with updated nodes (and optionally edges)  
     - Template: compute_messages → _aggregate → update_nodes
@@ -62,31 +98,35 @@ class MessagePassingBlock(ABC, nn.Module):
     # Whether this block produces updated edge features.
     updates_edges: bool = True
 
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        if 'forward' in cls.__dict__:
+            raise TypeError(
+                f"{cls.__name__} cannot override final method 'forward' from "
+                f"MessagePassingBase. Implement compute_messages() and "
+                f"supply a node_updater instead."
+            )
+        if 'update_nodes' in cls.__dict__:
+            raise TypeError(
+                f"{cls.__name__} cannot override 'update_nodes' from "
+                f"MessagePassingBase. Supply a node_updater to __init__ instead."
+            )
+
     def __init__(
         self,
         latent_dim: int,
-        aggregate: Union[Aggregation, Literal['sum', 'mean', 'max', 'min'], Callable] = 'sum',
-        aggregate_fn: Optional[Callable] = None,  # Deprecated, use aggregate
+        aggregate: Union[Aggregation, Literal['sum', 'mean', 'max', 'min']] = 'sum',
+        node_updater: Optional[nn.Module] = None,
     ):
         super().__init__()
         self.latent_dim = latent_dim
+        self.aggregate_fn = get_aggregation(aggregate)
         
-        # Normalize aggregation input: support multiple types
-        # Priority: aggregate_fn (deprecated) > aggregate (new) > default
-        if aggregate_fn is not None:
-            # Legacy: aggregate_fn takes precedence
-            self._aggregate_fn = aggregate_fn
-        elif callable(aggregate) and not isinstance(aggregate, str):
-            # New: Aggregation Protocol instance or custom callable
-            self._aggregate_fn = get_aggregation(aggregate)
-        elif isinstance(aggregate, str):
-            # New: String shortcut
-            self._aggregate_fn = get_aggregation(aggregate)
+        # Node-update strategy (composable)
+        if node_updater is not None:
+            self.node_updater = node_updater
         else:
-            # Fallback (shouldn't happen)
-            raise TypeError(
-                f"aggregate must be Aggregation, string, or callable, got {type(aggregate)}"
-            )
+            self.node_updater = _default_node_updater(latent_dim)
 
     def _aggregate(
         self,
@@ -94,7 +134,7 @@ class MessagePassingBlock(ABC, nn.Module):
         receivers: torch.Tensor,
         num_nodes: int,
     ) -> torch.Tensor:
-        return self._aggregate_fn(messages, receivers, num_nodes)
+        return self.aggregate_fn(messages, receivers, num_nodes)
 
     @abstractmethod
     def compute_messages(
@@ -108,112 +148,69 @@ class MessagePassingBlock(ABC, nn.Module):
         """
         ...
 
-    @abstractmethod
-    def update_nodes(
-        self,
-        nodes: torch.Tensor,
-        aggregated: torch.Tensor,
-        graph: GraphsTuple,
-    ) -> torch.Tensor:
-        ...
-
+    @final
     def forward(self, graph: GraphsTuple) -> GraphsTuple:
         if graph.senders is None:
             # Edgeless graph (e.g. after aggressive pooling strips all edges).
-            # No messages to aggregate — return graph with only the node MLP
+            # No messages to aggregate — return graph with only the node updater
             # applied to a zero-aggregation signal.
             zero_agg = torch.zeros_like(graph.nodes)
-            new_nodes = self.update_nodes(graph.nodes, zero_agg, graph)
+            new_nodes = self.node_updater(graph.nodes, zero_agg)
             return graph.replace(nodes=new_nodes)
+        # Standard message passing flow
+        # 1. Compute messages and optionally new edges
         messages, new_edges = self.compute_messages(graph)
+        # 2. Aggregate messages to receiver nodes
         aggregated = self._aggregate(messages, graph.receivers, graph.nodes.shape[0])
-        new_nodes = self.update_nodes(graph.nodes, aggregated, graph)
-        return graph.replace(
-            nodes=new_nodes,
-            edges=new_edges if new_edges is not None else graph.edges,
-        )
+        # 3. Update node features via composed node_updater
+        new_nodes = self.node_updater(graph.nodes, aggregated)
+        # 4. Return updated graph (with new edges if provided)
+        return graph.replace(nodes=new_nodes, edges=new_edges) \
+                    if new_edges is not None \
+                    else graph.replace(nodes=new_nodes)
 
 
-class GraphNetBlock(MessagePassingBlock):
+class GraphNetBlock(MessagePassingBase):
     """
-    Single node/edge message-passing step (DeepMind Graph Nets style).
-    
-    This is the most general-purpose block in the framework. It performs
-    a complete 2-step update:
-    
-    1. **Edge update**: ``new_e_ij = MLP([v_i, v_j; e_ij])``
-       - Concatenates sender node, receiver node, and edge features
-       - Transforms via MLP to produce new edge features
-       - **Updates edges**: Yes (output includes updated edges)
-    2. **Node update**: ``new_v_i = MLP([v_i; a_i])``
-       - Aggregated messages are concatenated with original node features
-       - Transformed via MLP to produce new node features
-    
-    Edge Feature Strategy:
-        Uses explicit edge attributes: [sender_node, receiver_node, edge_attr]
-        - sender_node: features of the source node (v_j)
-        - receiver_node: features of the target node (v_i)
-        - edge_attr: the edge feature tensor (e_ij)
-    
-    Aggregation:
-        Configurable via ``aggregate`` parameter. Default is sum aggregation.
-        Use ``aggregate='max'`` or ``aggregate='mean'`` for different behaviors.
-    
-    Comparison with other MessagePassingBlocks:
-    
-    +---------------------+---------------------------+--------------------------+---------------------------+
-    | Aspect              | GraphNetBlock             | EdgeConditionedConvBlock| EdgeConvBlock             |
-    +=====================+===========================+==========================+===========================+
-    | Edge features       | [v_i, v_j, e_ij] concat   | e_ij → weight matrix    | [v_i, v_j - v_i] diff    |
-    | Updates edges       | Yes                      | No                       | No                        |
-    | Default aggregation | sum                      | sum                      | max                       |
-    | Use case            | General purpose          | Edge-weighted conv      | Point cloud / geometric   |
-    +---------------------+---------------------------+--------------------------+---------------------------+
-    
-    Use this when all conditioning information (PDE parameters, time, BCs)
-    has already been encoded into per-node or per-edge features before
-    entering the processor. If you need a dedicated global channel, use
-    :class:`GlobalGraphNetBlock` instead.
-    
+    Single DeepMind GraphNets message-passing step.  Updates both edges and nodes.
+
+    1. **Edge update**: ``new_e_ij = MLP([v_j; v_i; e_ij])``  — ``[E, 3D] → [E, D]``
+    2. **Aggregation**: ``a_i = Σ_{j∈N(i)} new_e_ij``         — ``[E, D] → [N, D]``
+    3. **Node update**: ``new_v_i = MLP([v_i; a_i])``          — ``[N, 2D] → [N, D]``
+
+    All MLPs are pointwise (row-wise); graph topology enters only through
+    gather (step 1) and scatter-aggregate (step 2).  Nodes, edges, and
+    outputs share the same dimension D (``latent_dim``).
+
     Args:
-        latent_dim: Dimension for node, edge, and output features. All
-            three feature channels are assumed to have this dimension after
-            encoding.
-        hidden_dim: Hidden dimension for internal MLPs.
-        activation: Activation function name (``'relu'``, ``'gelu'``, ``'silu'``, ``'tanh'``).
-        aggregate: Aggregation strategy. Options: ``'sum'``, ``'mean'``, ``'max'``, ``'min'``,
-            or an Aggregation instance (e.g., ``Sum()``, ``Max()``), or a custom callable.
-            Default is ``'sum'``.
-        aggregate_fn: Deprecated. Use ``aggregate`` instead.
-    
-    Example::
-    
-        from gnn_pde_v2.components import GraphNetBlock
-        from gnn_pde_v2.core import GraphsTuple
-        import torch
-        
-        # Basic usage (sum aggregation)
-        block = GraphNetBlock(latent_dim=128)
-        graph = GraphsTuple(...)  # Your input graph
-        out_graph = block(graph)
-        
-        # Custom aggregation
-        block = GraphNetBlock(latent_dim=128, aggregate='max')
-        block = GraphNetBlock(latent_dim=128, aggregate=Max())
+        latent_dim: Common feature dimension D for nodes, edges, and outputs.
+        hidden_dim: Hidden dimension for the two internal MLPs.
+        activation: Activation function name.
+        aggregate: Aggregation strategy (``'sum'``, ``'mean'``, ``'max'``, ``'min'``).
+        node_updater: Optional custom node updater. If None, uses
+            ConcatMLPNodeUpdater via factory.
     """
+
+    updates_edges = True
 
     def __init__(
         self,
         latent_dim: int,
         hidden_dim: int = 128,
         activation: str = 'gelu',
-        aggregate: Union[Aggregation, Literal['sum', 'mean', 'max', 'min'], Callable] = 'sum',
-        aggregate_fn: Optional[Callable] = None,  # Deprecated, use aggregate
+        aggregate: Union[Aggregation, Literal['sum', 'mean', 'max', 'min']] = 'sum',
+        node_updater: Optional[nn.Module] = None,
     ):
+        if node_updater is None:
+            node_updater = concat_mlp_factory(
+                latent_dim=latent_dim,
+                hidden_dim=hidden_dim,
+                activation=activation,
+            )()
         super().__init__(
             latent_dim=latent_dim,
             aggregate=aggregate,
-            aggregate_fn=aggregate_fn,
+            node_updater=node_updater,
         )
 
         # Edge update: [sender_node, receiver_node, edge] → new_edge
@@ -224,14 +221,6 @@ class GraphNetBlock(MessagePassingBlock):
             activation=activation,
         )
 
-        # Node update: [node, aggregated_edges] → new_node
-        self.node_mlp = MLP(
-            in_dim=2 * latent_dim,
-            out_dim=latent_dim,
-            hidden_dims=[hidden_dim, hidden_dim],
-            activation=activation,
-        )
-
     def compute_messages(
         self,
         graph: GraphsTuple,
@@ -240,123 +229,40 @@ class GraphNetBlock(MessagePassingBlock):
         senders = graph.senders
         receivers = graph.receivers
 
-        # --- Edge update ---
+        # ``new_e_ij = MLP([v_j, v_i, e_ij])``  for every edge in parallel
         edge_inputs = torch.cat(
             [nodes[senders], nodes[receivers], graph.edges], dim=-1
         )
         new_edges = self.edge_mlp(edge_inputs)
+        # Messages == new edges: aggregated for node update AND stored as updated edges
         return new_edges, new_edges
 
-    def update_nodes(
-        self,
-        nodes: torch.Tensor,
-        aggregated: torch.Tensor,
-        graph: GraphsTuple,
-    ) -> torch.Tensor:
-        node_inputs = torch.cat([nodes, aggregated], dim=-1)
-        return self.node_mlp(node_inputs)
 
+class EdgeConditionedConvBlock(MessagePassingBase):
+    """Edge-conditioned message passing with pluggable edge transforms.
 
-class EdgeConditionedConvBlock(MessagePassingBlock):
-    """
-    Edge-conditioned convolution block (NNConv-style / Neural Operator).
-    
-    This block uses edge attributes to dynamically compute message weights,
-    making it ideal for scenarios where edge features carry important 
-    conditioning information (e.g., edge positions, physical properties).
-    
-    Two-step process:
-    
-    1. **Message computation**: ``m_ij = v_j ⊙ f(e_ij)``
-       - Uses edge features e_ij to generate a weight tensor f(e_ij)
-       - Applies weight to sender node features v_j
-       - Does NOT use receiver node features in message (only in update)
-       - **Updates edges**: No (edges passed through unchanged)
-    
-    2. **Node update**: ``new_v_i = a_i + (optional) v_i @ W + b``
-       - Aggregated messages optionally combined with:
-         - Root weight: v_i @ root_matrix (learnable skip connection)
-         - Bias term
-    
-    Edge Feature Strategy:
-        Uses explicit edge attributes as input to weight network:
-        - edge_attr → MLP → weight tensor → multiply with sender node
-        - Four weight types available: 'full', 'vector', 'scalar', 'low_rank'
-    
-    Weight Generation Modes:
-        - ``'full'``: Per-edge [H, H] matrix (full transformation)
-        - ``'vector'``: Per-edge [H] vector (channel-wise scaling)
-        - ``'scalar'``: Per-edge [1] scalar (global scaling)
-        - ``'low_rank'``: Symmetric low-rank approximation W_e ≈ U_e · U_e^T
-    
-    Low-Rank Mode:
-        Memory-efficient symmetric factorization for large latent dimensions.
-        Instead of computing full d×d weight matrices, computes factorized 
-        U_e ∈ R^{d×r} where r << d.
-        
-        Message computation: ``M_e = U_e · U_e^T · x_j``
-        
-        Memory reduction: d×r vs d² (ratio = r/d)
-        For d=64, r=8: 512 values vs 4096 values (8× reduction)
-        
-        The symmetric factorization produces positive semi-definite weight 
-        matrices and may better match physical symmetries in Green's function 
-        kernels.
-    
-    Aggregation:
-        Configurable via ``aggregate`` parameter. Default is sum aggregation.
-    
-    Comparison with other MessagePassingBlocks:
-    
-    +---------------------+---------------------------+--------------------------+---------------------------+
-    | Aspect              | GraphNetBlock             | EdgeConditionedConvBlock| EdgeConvBlock             |
-    +=====================+===========================+==========================+===========================+
-    | Edge features       | [v_i, v_j, e_ij] concat   | e_ij → weight matrix    | [v_i, v_j - v_i] diff    |
-    | Updates edges       | Yes                      | No                       | No                        |
-    | Default aggregation | sum                      | sum                      | max                       |
-    | Use case            | General purpose          | Edge-weighted conv      | Point cloud / geometric   |
-    +---------------------+---------------------------+--------------------------+---------------------------+
-    
+    The block first maps edge features to per-edge weights using
+    ``edge_weight_net``, then delegates message formation to ``edge_processor``.
+    Messages are aggregated to receiver nodes and optionally combined with a
+    learned root projection and bias.
+
+    By default, ``edge_processor`` is :class:`FullEdgeMessageProcessor`, which
+    preserves the original full-rank behavior.
+
     Args:
-        latent_dim: Dimension for node features.
-        edge_latent_dim: Dimension for edge features.
-        hidden_dim: Hidden dimension for edge weight network.
-        edge_weight_type: Weight generation mode. Options: ``'full'``, ``'vector'``, 
-            ``'scalar'``, ``'low_rank'``.
-        low_rank: Rank for low-rank approximation when ``edge_weight_type='low_rank'``.
-            Must be <= latent_dim. Use values like latent_dim//8 to latent_dim//4 
-            for memory savings. Ignored for other weight types.
-        aggregate: Aggregation strategy. Options: ``'sum'``, ``'mean'``, ``'max'``, ``'min'``,
-            or an Aggregation instance, or a custom callable. Default is ``'sum'``.
-        aggregate_fn: Deprecated. Use ``aggregate`` instead.
-        root_weight: Whether to add skip connection via learned root matrix.
-            Default is True.
-        bias: Whether to add bias term. Default is True.
-        activation: Activation function name for weight network.
-    
-    Example::
-    
-        from gnn_pde_v2.components import EdgeConditionedConvBlock
-        
-        # Full weight matrix (most expressive)
-        block = EdgeConditionedConvBlock(latent_dim=128, edge_latent_dim=16, edge_weight_type='full')
-        
-        # Vector gating (channel-wise scaling)
-        block = EdgeConditionedConvBlock(latent_dim=128, edge_latent_dim=16, edge_weight_type='vector')
-        
-        # Scalar gating (global scaling)
-        block = EdgeConditionedConvBlock(latent_dim=128, edge_latent_dim=16, edge_weight_type='scalar')
-        
-        # Low-rank symmetric factorization (memory-efficient)
-        block = EdgeConditionedConvBlock(
-            latent_dim=128, 
-            edge_latent_dim=16, 
-            edge_weight_type='low_rank',
-            low_rank=16,  # r=16 for d=128 gives 8× memory reduction
-        )
-        
-        # Custom aggregation
-        block = EdgeConditionedConvBlock(latent_dim=128, edge_latent_dim=16, aggregate='max')
+        latent_dim: Node latent dimension.
+        edge_latent_dim: Edge feature dimension consumed by ``edge_weight_net``.
+            Used for eager pipeline verification at construction time.
+        edge_weight_net: ``nn.Module`` mapping edge features
+            ``[E, edge_latent_dim]`` to edge weights
+            ``[E, edge_processor.weight_out_dim]``.  **Required** — the
+            caller is responsible for building this network with the
+            correct input/output dimensions.
+        aggregate: Aggregation strategy for incoming messages.
+        root_weight: Whether to add a learned root projection.
+        bias: Whether to add a learned bias term.
+        edge_processor: Edge-message processor module. Must satisfy
+            :class:`~gnn_pde_v2.core.protocols.EdgeMessageProcessor`.
     """
 
     updates_edges = False
@@ -365,57 +271,113 @@ class EdgeConditionedConvBlock(MessagePassingBlock):
         self,
         latent_dim: int,
         edge_latent_dim: int,
-        hidden_dim: int = 128,
-        edge_weight_type: str = 'full',
-        low_rank: int = 0,
-        aggregate: Union[Aggregation, Literal['sum', 'mean', 'max', 'min'], Callable] = 'sum',
-        aggregate_fn: Optional[Callable] = None,  # Deprecated, use aggregate
+        edge_weight_net: nn.Module,
+        aggregate: Union[Aggregation, Literal['sum', 'mean', 'max', 'min']] = 'sum',
         root_weight: bool = True,
         bias: bool = True,
-        activation: str = 'relu',
+        edge_processor: Optional[EdgeMessageProcessor] = None,
+        node_updater: Optional[nn.Module] = None,
     ):
+        if node_updater is None:
+            node_updater = root_weight_factory(
+                latent_dim=latent_dim,
+                root_weight=root_weight,
+                bias=bias,
+            )()
         super().__init__(
             latent_dim=latent_dim,
             aggregate=aggregate,
-            aggregate_fn=aggregate_fn,
+            node_updater=node_updater,
         )
 
-        if edge_weight_type == 'full':
-            out_dim = latent_dim * latent_dim
-        elif edge_weight_type == 'vector':
-            out_dim = latent_dim
-        elif edge_weight_type == 'scalar':
-            out_dim = 1
-        elif edge_weight_type == 'low_rank':
-            if low_rank <= 0:
-                raise ValueError(f"low_rank must be positive when edge_weight_type='low_rank', got {low_rank}")
-            if low_rank > latent_dim:
-                raise ValueError(f"low_rank ({low_rank}) must be <= latent_dim ({latent_dim})")
-            out_dim = latent_dim * low_rank
-            self.low_rank = low_rank
-        else:
-            raise ValueError(f"Unknown edge_weight_type: {edge_weight_type}")
-
-        self.edge_weight_type = edge_weight_type
-        self.edge_weight_net = MLP(
-            in_dim=edge_latent_dim,
-            out_dim=out_dim,
-            hidden_dims=[hidden_dim],
-            activation=activation,
-            use_layer_norm=False,
+        resolved_processor = (
+            edge_processor
+            if edge_processor is not None
+            else _default_edge_message_processor(latent_dim)
+        )
+        self._validate_edge_processor(
+            edge_processor=resolved_processor,
+            latent_dim=latent_dim,
         )
 
-        if root_weight:
-            self.root = nn.Parameter(torch.empty(latent_dim, latent_dim))
-        else:
-            self.register_parameter('root', None)
+        self.edge_processor = resolved_processor
+        self.low_rank = getattr(resolved_processor, 'low_rank', 0)
 
-        if bias:
-            self.bias = nn.Parameter(torch.empty(latent_dim))
-        else:
-            self.register_parameter('bias', None)
+        if not isinstance(edge_weight_net, nn.Module):
+            raise TypeError(
+                "edge_weight_net must be an nn.Module for proper parameter "
+                "registration and torch.compile() support"
+            )
+        self.edge_weight_net = edge_weight_net
+        self._verify_edge_message_pipeline(edge_latent_dim=edge_latent_dim)
 
-        self.reset_parameters()
+    @staticmethod
+    def _validate_edge_processor(
+        edge_processor: EdgeMessageProcessor,
+        latent_dim: int,
+    ) -> int:
+        if not isinstance(edge_processor, nn.Module):
+            raise TypeError(
+                "edge_processor must be an nn.Module to preserve parameter registration "
+                "and torch.compile() specialization"
+            )
+        if not isinstance(edge_processor, EdgeMessageProcessor):
+            raise TypeError(
+                "edge_processor must satisfy EdgeMessageProcessor protocol: "
+                "provide weight_out_dim and forward(src_x, edge_weights)"
+            )
+        weight_out_dim = edge_processor.weight_out_dim
+        if not isinstance(weight_out_dim, int) or weight_out_dim <= 0:
+            raise ValueError(
+                f"edge_processor.weight_out_dim must be a positive int, got {weight_out_dim!r}"
+            )
+        processor_latent_dim = edge_processor.latent_dim
+        if processor_latent_dim != latent_dim:
+            raise ValueError(
+                "edge_processor latent_dim must match block latent_dim: "
+                f"got {processor_latent_dim} vs {latent_dim}"
+            )
+        return weight_out_dim
+
+    def _verify_edge_message_pipeline(self, edge_latent_dim: int, num_edges: int = 2) -> None:
+        """Eagerly verify the full edge-weight-net → edge-processor pipeline."""
+        if num_edges <= 0:
+            raise ValueError(f"num_edges must be positive, got {num_edges}")
+
+        tensor_kwargs = self._example_tensor_kwargs()
+        edge_features = torch.randn(num_edges, edge_latent_dim, **tensor_kwargs)
+        src_x = torch.randn(num_edges, self.latent_dim, **tensor_kwargs)
+
+        with torch.no_grad():
+            edge_weights = self.edge_weight_net(edge_features)
+            out = self.edge_processor(src_x, edge_weights)
+
+        if edge_weights.ndim != 2:
+            raise ValueError(
+                "edge_weight_net must return rank-2 tensor [E, weight_out_dim] during verification"
+            )
+        if edge_weights.shape != (num_edges, self.edge_processor.weight_out_dim):
+            raise ValueError(
+                "edge_weight_net and edge_processor disagree on weight shape during verification: "
+                f"got {tuple(edge_weights.shape)} vs ({num_edges}, {self.edge_processor.weight_out_dim})"
+            )
+        if out.ndim != 2 or out.shape != (num_edges, self.latent_dim):
+            raise ValueError(
+                "edge message pipeline must return shape [E, latent_dim] during verification: "
+                f"got {tuple(out.shape)} vs ({num_edges}, {self.latent_dim})"
+            )
+
+    def _example_tensor_kwargs(self) -> dict[str, torch.device | torch.dtype]:
+        """Infer device/dtype for eager verification tensors."""
+        ref: Optional[torch.Tensor] = next(self.edge_weight_net.parameters(), None)
+        if ref is None:
+            ref = next(self.edge_weight_net.buffers(), None)
+        if ref is None:
+            return {}
+        tensor_kwargs: dict[str, torch.device | torch.dtype] = {"device": ref.device}
+        if torch.is_floating_point(ref):
+            tensor_kwargs["dtype"] = ref.dtype
+        return tensor_kwargs
 
     def reset_parameters(self):
         for m in self.edge_weight_net.modules():
@@ -423,121 +385,59 @@ class EdgeConditionedConvBlock(MessagePassingBlock):
                 nn.init.xavier_uniform_(m.weight)
                 if m.bias is not None:
                     nn.init.zeros_(m.bias)
-        if self.root is not None:
-            nn.init.xavier_uniform_(self.root)
-        if self.bias is not None:
-            nn.init.zeros_(self.bias)
 
     def compute_messages(
         self,
         graph: GraphsTuple,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
-        H = self.latent_dim
-        src_x = graph.nodes[graph.senders]  # [E, H]
-
+        src_x = graph.nodes[graph.senders]  # shape [E, H]
         w = self.edge_weight_net(graph.edges)
-        
-        if self.edge_weight_type == 'full':
-            W = w.view(-1, H, H)
-            msg = torch.bmm(src_x.unsqueeze(1), W).squeeze(1)  # [E, H]
-        elif self.edge_weight_type == 'low_rank':
-            # Symmetric low-rank message computation: M_e = U_e · U_e^T · x_j
-            # Step 1: Reshape to get U_e factors [E, d, r]
-            edge_u = w.view(-1, H, self.low_rank)  # [E, d, r]
-            # Step 2: Project to rank-r space: h_e = U_e^T · x_j
-            # x_j: [E, d], U_e: [E, d, r] -> h_e: [E, r]
-            h_e = torch.einsum('ed,edr->er', src_x, edge_u)
-            # Step 3: Project back to d-dim: M_e = U_e · h_e
-            msg = torch.einsum('er,edr->ed', h_e, edge_u)  # [E, d]
-        else:
-            msg = src_x * w  # [E, H]
-
+        msg = self.edge_processor(src_x, w)
         return msg, None  # Keep edges unchanged
-
-    def update_nodes(
-        self,
-        nodes: torch.Tensor,
-        aggregated: torch.Tensor,
-        graph: GraphsTuple,
-    ) -> torch.Tensor:
-        out = aggregated
-        if self.root is not None:
-            out = out + nodes @ self.root
-        if self.bias is not None:
-            out = out + self.bias
-        return out
 
 
 # ---------------------------------------------------------------------------
 # EdgeConv block (DGCNN-style)
 # ----------------------------------------------------------------------------
 
-class EdgeConvBlock(MessagePassingBlock):
+class EdgeConvBlock(MessagePassingBase):
     """
-    EdgeConv-style message passing (DGCNN-style / Point Cloud Networks).
-    
-    This block is designed for capturing local geometric structure in graphs
-    where edge features are implicitly derived from node feature differences
-    rather than from explicit edge attributes.
-    
-    Two-step process:
-    
-    1. **Message computation**: ``m_ij = MLP([v_i; v_j - v_i])``
-       - Computes edge features from node difference: (v_j - v_i)
-       - Concatenates with receiver node: [v_i; v_j - v_i]
-       - Transforms via MLP to produce message
-       - **Does NOT use explicit edge attributes** (graph.edges is ignored)
-       - **Updates edges**: No (edges passed through unchanged)
-    
-    2. **Node update**: ``new_v_i = a_i``
-       - Direct pass-through: aggregated messages become new node features
-       - No additional transformation (unlike GraphNetBlock which uses MLP)
-    
-    Edge Feature Strategy:
-        Implicit derivation from node features:
-        - Uses node difference: v_j - v_i (relative feature change)
-        - Does NOT use explicit edge attributes from graph.edges
-        - This is ideal for point clouds where edges represent spatial proximity
-    
-    Aggregation:
-        Default is **max** aggregation (original EdgeConv / DGCNN behavior).
-        This captures the strongest signal from neighbors, which is particularly
-        useful for point cloud tasks. However, aggregation is fully configurable.
-    
-    Comparison with other MessagePassingBlocks:
-    
-    +---------------------+---------------------------+--------------------------+---------------------------+
-    | Aspect              | GraphNetBlock             | EdgeConditionedConvBlock| EdgeConvBlock             |
-    +=====================+===========================+==========================+===========================+
-    | Edge features       | [v_i, v_j, e_ij] concat   | e_ij → weight matrix    | [v_i, v_j - v_i] diff    |
-    | Updates edges       | Yes                      | No                       | No                        |
-    | Default aggregation | sum                      | sum                      | max                       |
-    | Use case            | General purpose          | Edge-weighted conv      | Point cloud / geometric   |
-    +---------------------+---------------------------+--------------------------+---------------------------+
-    
+    EdgeConv-style message passing (DGCNN / Point Cloud Networks).
+
+    ``m_ij = edge_mlp(features(v_i, v_j, e_ij))`` → aggregate → pass-through node update.
+    Edges are **not** updated.  Default aggregation is **max**.
+
+    Edge Feature Modes (``edge_feature_mode``):
+        - ``'node_difference'`` (default): ``[v_i; v_j - v_i]``  — dim ``2D``
+        - ``'concat'``: ``[v_i; v_j]``  — dim ``2D``
+        - ``'difference_only'``: ``v_j - v_i``  — dim ``D``
+        - ``'concat_with_edges'``: ``[v_i; v_j - v_i; e_ij]``  — dim ``2D + edge_input_dim``
+          (requires ``edge_input_dim``)
+
     Args:
-        latent_dim: Dimension for node features.
-        hidden_dim: Hidden dimension for edge feature MLP.
-        aggregate: Aggregation strategy. Options: ``'sum'``, ``'mean'``, ``'max'``, ``'min'``,
-            or an Aggregation instance, or a custom callable. Default is ``'max'``.
-        aggregate_fn: Deprecated. Use ``aggregate`` instead.
-        activation: Activation function name for edge MLP.
-    
+        latent_dim: Node feature dimension (``D``).
+        hidden_dim: Hidden dim for the default edge MLP (ignored if ``edge_mlp`` given).
+        aggregate: ``'sum'``, ``'mean'``, ``'max'`` (default), ``'min'``, or ``Aggregation``.
+        activation: Activation for the default edge MLP.
+        edge_feature_mode: Feature assembly mode (see above).
+        edge_input_dim: Explicit edge attribute dim; required for ``'concat_with_edges'``.
+        edge_mlp: Custom ``nn.Module`` mapping assembled features → ``[E, D]``.
+
     Example::
-    
-        from gnn_pde_v2.components import EdgeConvBlock
-        from gnn_pde_v2.core import Max  # Protocol instance
-        
-        # Default: max aggregation (original EdgeConv / DGCNN)
-        block = EdgeConvBlock(latent_dim=128)
-        
-        # Configurable aggregation
-        block = EdgeConvBlock(latent_dim=128, aggregate='sum')
-        block = EdgeConvBlock(latent_dim=128, aggregate=Max())  # Explicit
-        
-        # With custom hidden dimension
-        block = EdgeConvBlock(latent_dim=128, hidden_dim=256)
+
+        block = EdgeConvBlock(latent_dim=128)                        # DGCNN defaults
+        block = EdgeConvBlock(latent_dim=128, aggregate='sum')       # different aggregation
+        block = EdgeConvBlock(latent_dim=128, edge_feature_mode='concat_with_edges',
+                              edge_input_dim=3)                      # with edge attrs
     """
+
+    #: Supported edge-feature mode labels.
+    EDGE_FEATURE_MODES = (
+        'node_difference',    # [v_i; v_j - v_i]           → 2 * latent_dim
+        'concat',             # [v_i; v_j]                 → 2 * latent_dim
+        'difference_only',    # v_j - v_i                  → latent_dim
+        'concat_with_edges',  # [v_i; v_j - v_i; e_ij]    → 2 * latent_dim + edge_input_dim
+    )
     
     updates_edges = False
     
@@ -545,54 +445,102 @@ class EdgeConvBlock(MessagePassingBlock):
         self,
         latent_dim: int,
         hidden_dim: int = 128,
-        aggregate: Union[Aggregation, str, Callable] = 'max',  # Default: max (original)
-        aggregate_fn: Optional[Callable] = None,  # Deprecated, use aggregate
+        aggregate: Union[Aggregation, Literal['sum', 'mean', 'max', 'min']] = 'max',  # Default: max (original)
         activation: str = 'relu',
+        edge_feature_mode: str = 'node_difference',
+        edge_input_dim: Optional[int] = None,
+        edge_mlp: Optional[nn.Module] = None,
+        node_updater: Optional[nn.Module] = None,
     ):
+        if node_updater is None:
+            node_updater = pass_through_factory(latent_dim=latent_dim)()
         super().__init__(
             latent_dim=latent_dim,
             aggregate=aggregate,
-            aggregate_fn=aggregate_fn,
+            node_updater=node_updater,
         )
         
-        # Edge feature MLP: [v_i, v_j - v_i] → message
-        self.edge_mlp = MLP(
-            in_dim=2 * latent_dim,
-            out_dim=latent_dim,
-            hidden_dims=[hidden_dim],
-            activation=activation,
+        if edge_feature_mode not in self.EDGE_FEATURE_MODES:
+            raise ValueError(
+                f"Unknown edge_feature_mode={edge_feature_mode!r}. "
+                f"Supported: {self.EDGE_FEATURE_MODES}"
+            )
+        self.edge_feature_mode = edge_feature_mode
+        self.edge_input_dim = edge_input_dim
+        
+        mlp_in_dim = self._edge_feature_dim(
+            latent_dim, edge_feature_mode, edge_input_dim,
         )
+        
+        if edge_mlp is not None:
+            self.edge_mlp = edge_mlp
+        else:
+            # Default MLP: assembled edge features → message
+            self.edge_mlp = MLP(
+                in_dim=mlp_in_dim,
+                out_dim=latent_dim,
+                hidden_dims=[hidden_dim],
+                activation=activation,
+            )
+
+    @staticmethod
+    def _edge_feature_dim(
+        latent_dim: int,
+        mode: str,
+        edge_input_dim: Optional[int] = None,
+    ) -> int:
+        """Return the feature dimension produced by *mode*."""
+        if mode == 'node_difference':
+            return 2 * latent_dim
+        elif mode == 'concat':
+            return 2 * latent_dim
+        elif mode == 'difference_only':
+            return latent_dim
+        elif mode == 'concat_with_edges':
+            if edge_input_dim is None:
+                raise ValueError(
+                    "edge_input_dim is required when "
+                    "edge_feature_mode='concat_with_edges'"
+                )
+            return 2 * latent_dim + edge_input_dim
+        else:
+            raise ValueError(
+                f"Unknown edge_feature_mode={mode!r}. "
+                f"Supported: {EdgeConvBlock.EDGE_FEATURE_MODES}"
+            )
+
+    def _compute_edge_features(self, graph: GraphsTuple) -> torch.Tensor:
+        """Assemble per-edge feature vectors according to ``edge_feature_mode``."""
+        nodes = graph.nodes
+        v_i = nodes[graph.receivers]   # receiver node features
+        v_j = nodes[graph.senders]     # sender node features
+        
+        if self.edge_feature_mode == 'node_difference':
+            return torch.cat([v_i, v_j - v_i], dim=-1)
+        elif self.edge_feature_mode == 'concat':
+            return torch.cat([v_i, v_j], dim=-1)
+        elif self.edge_feature_mode == 'difference_only':
+            return v_j - v_i
+        elif self.edge_feature_mode == 'concat_with_edges':
+            return torch.cat([v_i, v_j - v_i, graph.edges], dim=-1)
+        else:
+            # Defensive; __init__ already validates
+            raise ValueError(f"Unknown edge_feature_mode={self.edge_feature_mode!r}")
     
     def compute_messages(
         self,
         graph: GraphsTuple,
     ) -> Tuple[torch.Tensor, None]:
-        nodes = graph.nodes
-        senders = graph.senders
-        receivers = graph.receivers
-        
-        # Edge features: [v_i, v_j - v_i]
-        v_i = nodes[receivers]  # receiver node features
-        v_j = nodes[senders]     # sender node features
-        edge_features = torch.cat([v_i, v_j - v_i], dim=-1)
-        
+        edge_features = self._compute_edge_features(graph)
         messages = self.edge_mlp(edge_features)
         return messages, None  # Don't update edges
-    
-    def update_nodes(
-        self,
-        nodes: torch.Tensor,
-        aggregated: torch.Tensor,
-        graph: GraphsTuple,
-    ) -> torch.Tensor:
-        return aggregated  # Direct pass-through
 
 
 # ---------------------------------------------------------------------------
 # GEN Block (GEneralized aggregation Network)
 # ---------------------------------------------------------------------------
 
-class GENBlock(MessagePassingBlock):
+class GENBlock(MessagePassingBase):
     """
     GEneralized aggregation Network block from Li et al. (2020).
     
@@ -644,38 +592,40 @@ class GENBlock(MessagePassingBlock):
         activation: str = 'relu',
         epsilon: float = 1e-6,
         message_norm: bool = False,
+        node_updater: Optional[nn.Module] = None,
     ):
+        if node_updater is None:
+            node_updater = residual_mlp_factory(
+                latent_dim=latent_dim,
+                hidden_dim=hidden_dim,
+                num_layers=num_mlp_layers,
+                activation=activation,
+                message_norm=message_norm,
+                epsilon=epsilon,
+            )()
         super().__init__(
             latent_dim=latent_dim,
             aggregate='sum',  # Softmax is applied before aggregation
+            node_updater=node_updater,
         )
         self.epsilon = epsilon
-        self.message_norm = message_norm
-        
-        # Node update MLP: transforms concatenated [node + aggregated_messages]
-        self.node_mlp = MLP(
-            in_dim=latent_dim,
-            out_dim=latent_dim,
-            hidden_dims=[hidden_dim] * num_mlp_layers,
-            activation=activation,
-            use_layer_norm=False,
-        )
-        
-        if message_norm:
-            # Learnable scale parameter for message normalization
-            self.message_scale = nn.Parameter(torch.ones(1))
     
     def compute_messages(
         self,
         graph: GraphsTuple,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         """
-        Compute GEN messages: m_ij = ReLU(e_ij + h_j) + epsilon
+        Compute GEN messages with softmax weighting.
+        
+        Raw messages ``m_ij = ReLU(e_ij + h_j) + epsilon`` are weighted by
+        per-receiver softmax attention before being returned, so the base
+        class ``forward`` can aggregate them directly via sum.
         
         Returns:
-            messages: [E, latent_dim] computed messages
+            messages: [E, latent_dim] softmax-weighted messages
             new_edges: None (edges are not updated in GEN)
         """
+
         nodes = graph.nodes
         edges = graph.edges
         senders = graph.senders
@@ -683,61 +633,16 @@ class GENBlock(MessagePassingBlock):
         # Gather sender node features
         sender_features = nodes[senders]
         
-        # Compute messages: m_ij = ReLU(e_ij + h_j) + epsilon
+        # Compute raw messages: m_ij = ReLU(e_ij + h_j) + epsilon
         messages = torch.relu(edges + sender_features) + self.epsilon
         
-        return messages, None  # Edges are NOT updated
-    
-    def update_nodes(
-        self,
-        nodes: torch.Tensor,
-        aggregated: torch.Tensor,
-        graph: GraphsTuple,
-    ) -> torch.Tensor:
-        """
-        Update nodes: h'_i = MLP(h_i + agg_i)
-        
-        Args:
-            nodes: [N, latent_dim] original node features
-            aggregated: [N, latent_dim] aggregated messages
-            graph: Input graph
-            
-        Returns:
-            [N, latent_dim] updated node features
-        """
-        # Optional message normalization
-        if self.message_norm:
-            agg_norm = torch.norm(aggregated, dim=-1, keepdims=True)
-            node_norm = torch.norm(nodes, dim=-1, keepdims=True)
-            aggregated = self.message_scale * node_norm * aggregated / (agg_norm + self.epsilon)
-        
-        # Residual-style update: h_i + agg_i
-        node_input = nodes + aggregated
-        return self.node_mlp(node_input)
-    
-    def forward(self, graph: GraphsTuple) -> GraphsTuple:
-        """
-        Apply GEN block with softmax aggregation.
-        
-        This overrides the base forward to insert softmax before aggregation.
-        """
-        # Compute messages (edges not updated)
-        messages, _ = self.compute_messages(graph)
-        
-        # Softmax aggregation: compute attention weights
-        from ..core.functional import scatter_softmax
+        # Softmax aggregation: weight messages before the base-class sum
         attention_weights = scatter_softmax(
-            messages, graph.receivers, dim=0, dim_size=graph.nodes.shape[0]
+            messages, graph.receivers, dim=0, dim_size=nodes.shape[0]
         )
         weighted_messages = attention_weights * messages
         
-        # Aggregate weighted messages
-        aggregated = self._aggregate(weighted_messages, graph.receivers, graph.nodes.shape[0])
-        
-        # Update nodes
-        new_nodes = self.update_nodes(graph.nodes, aggregated, graph)
-        
-        return graph.replace(nodes=new_nodes)
+        return weighted_messages, None  # Edges are NOT updated
 
 
 # ---------------------------------------------------------------------------
@@ -769,9 +674,7 @@ class GlobalGraphNetBlock(nn.Module):
             not optional.
         hidden_dim: Hidden dimension for internal MLPs.
         activation: Activation function name.
-        aggregate_fn: Edge-to-node aggregation callable
-            ``(edge_features, receivers, num_nodes) -> aggregated``.
-            Defaults to sum aggregation.
+        aggregate: Aggregation strategy for node updates (``'sum'``, ``'mean'``, ``'max'``, ``'min'``).
         global_pool: Pooling method used when aggregating nodes/edges back
             to global (``'mean'``, ``'sum'``, ``'max'``).  Defaults to
             ``'mean'``.
@@ -788,8 +691,7 @@ class GlobalGraphNetBlock(nn.Module):
         global_latent_dim: int,
         hidden_dim: int = 128,
         activation: str = 'gelu',
-        aggregate: Union[Aggregation, Literal['sum', 'mean', 'max', 'min'], Callable] = 'sum',
-        aggregate_fn: Optional[Callable] = None,  # Deprecated, use aggregate
+        aggregate: Union[Aggregation, Literal['sum', 'mean', 'max', 'min']] = 'sum',
         global_pool: str = 'mean',
     ):
         super().__init__()
@@ -798,11 +700,8 @@ class GlobalGraphNetBlock(nn.Module):
         self.global_latent_dim = global_latent_dim
         self.global_pool = global_pool
         
-        # Normalize aggregation: support new aggregate param + legacy aggregate_fn
-        if aggregate_fn is not None:
-            self.aggregate_fn = aggregate_fn
-        else:
-            self.aggregate_fn = get_aggregation(aggregate)
+        # Normalize aggregation: support new aggregate param
+        self.aggregate_fn = get_aggregation(aggregate)
 
         # Edge update: [sender, receiver, edge, global] → new_edge
         self.edge_mlp = MLP(
@@ -901,8 +800,9 @@ class GraphNetProcessor(nn.Module):
         activation: Activation function name.
         residual: Whether to add residual connections between blocks.
             When True, uses pre-norm residuals for stability.
-        aggregate_fn: Edge-to-node aggregation callable passed to each
-            block.  Defaults to sum aggregation.
+        aggregate: Aggregation strategy passed to each block.
+            Options: ``'sum'``, ``'mean'``, ``'max'``, ``'min'``,
+            or an Aggregation instance.  Defaults to ``'sum'``.
         use_checkpoint: If ``True``, applies gradient checkpointing to
             each block during the forward pass.  Trades compute for
             memory — each block's activations are recomputed during the
@@ -923,7 +823,7 @@ class GraphNetProcessor(nn.Module):
         hidden_dim: int = 128,
         activation: str = 'gelu',
         residual: bool = True,
-        aggregate_fn: Optional[Callable] = None,
+        aggregate: Union[Aggregation, Literal['sum', 'mean', 'max', 'min']] = 'sum',
         use_checkpoint: bool = False,
         block_factory: Optional[Callable[[], nn.Module]] = None,
     ):
@@ -940,7 +840,7 @@ class GraphNetProcessor(nn.Module):
                     latent_dim=latent_dim,
                     hidden_dim=hidden_dim,
                     activation=activation,
-                    aggregate_fn=aggregate_fn,
+                    aggregate=aggregate,
                 )
                 for _ in range(n_layers)
             ])
@@ -1010,7 +910,6 @@ class GlobalGraphNetProcessor(nn.Module):
         activation: Activation function name.
         residual: Whether to add residual connections between blocks.
             When True, uses pre-norm residuals for stability.
-        aggregate_fn: Edge-to-node aggregation callable.
         global_pool: Pooling method for node/edge → global aggregation.
         use_checkpoint: If ``True``, applies gradient checkpointing to
             each block.  Reduces peak memory by recomputing activations
@@ -1033,7 +932,6 @@ class GlobalGraphNetProcessor(nn.Module):
         hidden_dim: int = 128,
         activation: str = 'gelu',
         residual: bool = True,
-        aggregate_fn: Optional[Callable] = None,
         global_pool: str = 'mean',
         use_checkpoint: bool = False,
     ):
@@ -1047,7 +945,6 @@ class GlobalGraphNetProcessor(nn.Module):
                 global_latent_dim=global_latent_dim,
                 hidden_dim=hidden_dim,
                 activation=activation,
-                aggregate_fn=aggregate_fn,
                 global_pool=global_pool,
             )
             for _ in range(n_layers)
@@ -1130,3 +1027,5 @@ class GlobalGraphNetProcessor(nn.Module):
                     new_graph = block(graph)
                 graph = new_graph
         return graph
+
+

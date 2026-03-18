@@ -13,7 +13,26 @@ import torch.nn as nn
 from functools import partial
 
 from gnn_pde_v2 import GraphsTuple
-from gnn_pde_v2.components import EdgeConditionedConvBlock, GraphNetProcessor
+from gnn_pde_v2.core import MLP
+from gnn_pde_v2.components import (
+    EdgeConditionedConvBlock,
+    FullEdgeMessageProcessor,
+    GraphNetProcessor,
+    LowRankEdgeMessageProcessor,
+)
+
+
+def _ewn(edge_latent_dim: int, processor=None, latent_dim: int = 64):
+    """Build a default edge_weight_net for testing."""
+    if processor is None:
+        processor = FullEdgeMessageProcessor(latent_dim)
+    return MLP(
+        in_dim=edge_latent_dim,
+        out_dim=processor.weight_out_dim,
+        hidden_dims=[128],
+        activation='relu',
+        use_layer_norm=False,
+    )
 
 
 # ========== Test Tolerance Constants ==========
@@ -45,9 +64,11 @@ class TestLowRankCorrectness:
 
     def test_output_shape(self, device):
         """Test that low-rank produces correct output shape."""
+        proc = LowRankEdgeMessageProcessor(64, 8)
         block = EdgeConditionedConvBlock(
             latent_dim=64, edge_latent_dim=7,
-            edge_weight_type='low_rank', low_rank=8,
+            edge_weight_net=_ewn(7, proc),
+            edge_processor=proc,
         ).to(device)
         
         graph = GraphsTuple.from_flat(
@@ -64,9 +85,11 @@ class TestLowRankCorrectness:
 
     def test_finite_outputs(self, device):
         """Test that outputs are finite (no NaN or Inf)."""
+        proc = LowRankEdgeMessageProcessor(32, 4)
         block = EdgeConditionedConvBlock(
             latent_dim=32, edge_latent_dim=8,
-            edge_weight_type='low_rank', low_rank=4,
+            edge_weight_net=_ewn(8, proc, latent_dim=32),
+            edge_processor=proc,
         ).to(device)
         
         graph = GraphsTuple.from_flat(
@@ -83,9 +106,11 @@ class TestLowRankCorrectness:
 
     def test_edgeless_graph(self, device):
         """Test handling of graphs with no edges."""
+        proc = LowRankEdgeMessageProcessor(16, 4)
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=8,
-            edge_weight_type='low_rank', low_rank=4,
+            edge_weight_net=_ewn(8, proc, latent_dim=16),
+            edge_processor=proc,
             root_weight=False, bias=False,
         ).to(device)
         
@@ -102,9 +127,11 @@ class TestLowRankCorrectness:
 
     def test_isolated_nodes(self, device):
         """Test handling of isolated nodes (no incoming edges)."""
+        proc = LowRankEdgeMessageProcessor(16, 4)
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=8,
-            edge_weight_type='low_rank', low_rank=4,
+            edge_weight_net=_ewn(8, proc, latent_dim=16),
+            edge_processor=proc,
             aggregate='mean',
         ).to(device)
         
@@ -125,9 +152,11 @@ class TestLowRankCorrectness:
 
     def test_self_loops(self, device):
         """Test handling of self-loops."""
+        proc = LowRankEdgeMessageProcessor(16, 4)
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=8,
-            edge_weight_type='low_rank', low_rank=4,
+            edge_weight_net=_ewn(8, proc, latent_dim=16),
+            edge_processor=proc,
         ).to(device)
         
         graph = GraphsTuple.from_flat(
@@ -166,15 +195,26 @@ class TestLowRankMemoryEfficiency:
         r = 8
         hidden_dim = 32
         edge_dim = 7
-        
+
+        full_proc = FullEdgeMessageProcessor(d)
+        lowrank_proc = LowRankEdgeMessageProcessor(d, r)
+
         block_full = EdgeConditionedConvBlock(
-            latent_dim=d, edge_latent_dim=edge_dim, hidden_dim=hidden_dim,
-            edge_weight_type='full', root_weight=False, bias=False,
+            latent_dim=d, edge_latent_dim=edge_dim,
+            edge_weight_net=MLP(
+                in_dim=edge_dim, out_dim=full_proc.weight_out_dim,
+                hidden_dims=[hidden_dim], activation='relu', use_layer_norm=False,
+            ),
+            edge_processor=full_proc, root_weight=False, bias=False,
         ).to(device)
         
         block_lowrank = EdgeConditionedConvBlock(
-            latent_dim=d, edge_latent_dim=edge_dim, hidden_dim=hidden_dim,
-            edge_weight_type='low_rank', low_rank=r,
+            latent_dim=d, edge_latent_dim=edge_dim,
+            edge_weight_net=MLP(
+                in_dim=edge_dim, out_dim=lowrank_proc.weight_out_dim,
+                hidden_dims=[hidden_dim], activation='relu', use_layer_norm=False,
+            ),
+            edge_processor=lowrank_proc,
             root_weight=False, bias=False,
         ).to(device)
         
@@ -208,9 +248,11 @@ class TestLowRankGradients:
 
     def test_gradient_flow(self, device):
         """Test that gradients flow through all parameters."""
+        proc = LowRankEdgeMessageProcessor(32, 8)
         block = EdgeConditionedConvBlock(
             latent_dim=32, edge_latent_dim=8,
-            edge_weight_type='low_rank', low_rank=8,
+            edge_weight_net=_ewn(8, proc, latent_dim=32),
+            edge_processor=proc,
         ).to(device)
         
         graph = GraphsTuple.from_flat(
@@ -234,16 +276,18 @@ class TestLowRankGradients:
         assert edge_net_has_grad, "Edge weight net should have non-zero gradients"
         
         # Check root weight gradients
-        assert block.root.grad is not None
+        assert block.node_updater.root.grad is not None
         
         # Check bias gradients
-        assert block.bias.grad is not None
+        assert block.node_updater.bias.grad is not None
 
     def test_gradient_numerical_stability(self, device):
         """Test gradient stability with different loss functions."""
+        proc = LowRankEdgeMessageProcessor(16, 4)
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=8,
-            edge_weight_type='low_rank', low_rank=4,
+            edge_weight_net=_ewn(8, proc, latent_dim=16),
+            edge_processor=proc,
         ).to(device)
         
         graph = GraphsTuple.from_flat(
@@ -289,9 +333,11 @@ class TestLowRankConfiguration:
     ])
     def test_valid_configurations(self, device, latent_dim, low_rank):
         """Test various valid (latent_dim, low_rank) combinations."""
+        proc = LowRankEdgeMessageProcessor(latent_dim, low_rank)
         block = EdgeConditionedConvBlock(
             latent_dim=latent_dim, edge_latent_dim=8,
-            edge_weight_type='low_rank', low_rank=low_rank,
+            edge_weight_net=_ewn(8, proc, latent_dim=latent_dim),
+            edge_processor=proc,
         ).to(device)
         
         graph = GraphsTuple.from_flat(
@@ -309,32 +355,25 @@ class TestLowRankConfiguration:
     def test_invalid_rank_zero_raises(self, device):
         """Test that rank=0 raises ValueError."""
         with pytest.raises(ValueError, match="low_rank must be positive"):
-            EdgeConditionedConvBlock(
-                latent_dim=16, edge_latent_dim=8,
-                edge_weight_type='low_rank', low_rank=0,
-            )
+            LowRankEdgeMessageProcessor(16, 0)
 
     def test_invalid_rank_negative_raises(self, device):
         """Test that negative rank raises ValueError."""
         with pytest.raises(ValueError, match="low_rank must be positive"):
-            EdgeConditionedConvBlock(
-                latent_dim=16, edge_latent_dim=8,
-                edge_weight_type='low_rank', low_rank=-1,
-            )
+            LowRankEdgeMessageProcessor(16, -1)
 
     def test_invalid_rank_too_large_raises(self, device):
         """Test that rank > latent_dim raises ValueError."""
         with pytest.raises(ValueError, match="low_rank .* must be <= latent_dim"):
-            EdgeConditionedConvBlock(
-                latent_dim=16, edge_latent_dim=8,
-                edge_weight_type='low_rank', low_rank=32,
-            )
+            LowRankEdgeMessageProcessor(16, 32)
 
     def test_rank_equal_to_latent_dim(self, device):
         """Test that rank == latent_dim is valid (though not efficient)."""
+        proc = LowRankEdgeMessageProcessor(16, 16)
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=8,
-            edge_weight_type='low_rank', low_rank=16,
+            edge_weight_net=_ewn(8, proc, latent_dim=16),
+            edge_processor=proc,
         ).to(device)
         
         graph = GraphsTuple.from_flat(
@@ -358,9 +397,11 @@ class TestLowRankAggregation:
     @pytest.mark.parametrize("aggregate", ['sum', 'mean'])
     def test_aggregation_methods(self, device, aggregate):
         """Test low-rank with sum and mean aggregation (primary use cases)."""
+        proc = LowRankEdgeMessageProcessor(16, 4)
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=8,
-            edge_weight_type='low_rank', low_rank=4,
+            edge_weight_net=_ewn(8, proc, latent_dim=16),
+            edge_processor=proc,
             aggregate=aggregate,
         ).to(device)
         
@@ -385,12 +426,14 @@ class TestLowRankIntegration:
 
     def test_in_graphnet_processor(self, device):
         """Test low-rank blocks in GraphNetProcessor."""
-        factory = partial(
-            EdgeConditionedConvBlock,
-            latent_dim=32, edge_latent_dim=8,
-            edge_weight_type='low_rank', low_rank=8,
-            aggregate='mean',
-        )
+        def factory():
+            proc = LowRankEdgeMessageProcessor(32, 8)
+            return EdgeConditionedConvBlock(
+                latent_dim=32, edge_latent_dim=8,
+                edge_weight_net=_ewn(8, proc, latent_dim=32),
+                edge_processor=proc,
+                aggregate='mean',
+            )
         
         processor = GraphNetProcessor(
             latent_dim=32, n_layers=3,
@@ -413,18 +456,24 @@ class TestLowRankIntegration:
     def test_mixed_full_and_low_rank_layers(self, device):
         """Test processor with mix of full and low-rank layers."""
         # Create processor manually with mixed blocks
+        full_proc = FullEdgeMessageProcessor(16)
+        lr_proc1 = LowRankEdgeMessageProcessor(16, 4)
+        lr_proc2 = LowRankEdgeMessageProcessor(16, 4)
         blocks = nn.ModuleList([
             EdgeConditionedConvBlock(
                 latent_dim=16, edge_latent_dim=8,
-                edge_weight_type='full',  # First layer full
+                edge_weight_net=_ewn(8, full_proc, latent_dim=16),
+                edge_processor=full_proc,  # First layer full
             ),
             EdgeConditionedConvBlock(
                 latent_dim=16, edge_latent_dim=8,
-                edge_weight_type='low_rank', low_rank=4,  # Second layer low-rank
+                edge_weight_net=_ewn(8, lr_proc1, latent_dim=16),
+                edge_processor=lr_proc1,  # Second layer low-rank
             ),
             EdgeConditionedConvBlock(
                 latent_dim=16, edge_latent_dim=8,
-                edge_weight_type='low_rank', low_rank=4,  # Third layer low-rank
+                edge_weight_net=_ewn(8, lr_proc2, latent_dim=16),
+                edge_processor=lr_proc2,  # Third layer low-rank
             ),
         ]).to(device)
         
@@ -453,9 +502,11 @@ class TestLowRankNumericalPrecision:
     @pytest.mark.parametrize("dtype", [torch.float32, torch.float64])
     def test_different_precisions(self, device, dtype):
         """Test low-rank with float32 and float64."""
+        proc = LowRankEdgeMessageProcessor(16, 4)
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=8,
-            edge_weight_type='low_rank', low_rank=4,
+            edge_weight_net=_ewn(8, proc, latent_dim=16),
+            edge_processor=proc,
         ).to(device).to(dtype)
         
         graph = GraphsTuple.from_flat(
@@ -473,9 +524,11 @@ class TestLowRankNumericalPrecision:
 
     def test_large_input_values(self, device):
         """Test stability with large input values."""
+        proc = LowRankEdgeMessageProcessor(16, 4)
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=8,
-            edge_weight_type='low_rank', low_rank=4,
+            edge_weight_net=_ewn(8, proc, latent_dim=16),
+            edge_processor=proc,
         ).to(device)
         
         graph = GraphsTuple.from_flat(
@@ -492,9 +545,11 @@ class TestLowRankNumericalPrecision:
 
     def test_small_input_values(self, device):
         """Test stability with small input values."""
+        proc = LowRankEdgeMessageProcessor(16, 4)
         block = EdgeConditionedConvBlock(
             latent_dim=16, edge_latent_dim=8,
-            edge_weight_type='low_rank', low_rank=4,
+            edge_weight_net=_ewn(8, proc, latent_dim=16),
+            edge_processor=proc,
         ).to(device)
         
         graph = GraphsTuple.from_flat(
@@ -522,14 +577,18 @@ class TestLowRankPerformance:
         d = 64
         r = 8
         
+        full_proc = FullEdgeMessageProcessor(d)
         block_full = EdgeConditionedConvBlock(
             latent_dim=d, edge_latent_dim=8,
-            edge_weight_type='full', root_weight=False, bias=False,
+            edge_weight_net=_ewn(8, full_proc),
+            edge_processor=full_proc, root_weight=False, bias=False,
         ).to(device)
         
+        lr_proc = LowRankEdgeMessageProcessor(d, r)
         block_lowrank = EdgeConditionedConvBlock(
             latent_dim=d, edge_latent_dim=8,
-            edge_weight_type='low_rank', low_rank=r,
+            edge_weight_net=_ewn(8, lr_proc),
+            edge_processor=lr_proc,
             root_weight=False, bias=False,
         ).to(device)
         

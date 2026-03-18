@@ -38,6 +38,15 @@ from torch import nn
 from .functional import aggregate_edges
 
 
+__all__ = [
+    'Aggregation',
+    'Sum',
+    'Mean',
+    'Max',
+    'Min',
+    'get_aggregation',
+]
+
 # ---------------------------------------------------------------------------
 # Aggregation Protocol
 # ---------------------------------------------------------------------------
@@ -167,7 +176,7 @@ _AGGREGATION_MAP: dict[str, Aggregation] = {
 
 
 def get_aggregation(
-    aggregate: Aggregation | Literal['sum', 'mean', 'max', 'min'] | Callable,
+    aggregate: Aggregation | Literal['sum', 'mean', 'max', 'min'], # purged Callable
 ) -> Callable:
     """
     Normalize various aggregation inputs to a callable.
@@ -176,7 +185,6 @@ def get_aggregation(
         aggregate: One of:
             - Aggregation Protocol instance (Sum, Mean, Max, Min)
             - String ('sum', 'mean', 'max', 'min')
-            - Callable with signature (messages, receivers, num_nodes) -> Tensor
 
     Returns:
         A callable with signature (messages, receivers, num_nodes) -> Tensor
@@ -200,25 +208,5 @@ def get_aggregation(
             )
         return _AGGREGATION_MAP[aggregate]
 
-    # Assume callable
-    if not callable(aggregate):
-        raise TypeError(
-            f"aggregate must be an Aggregation instance, string, or callable, "
-            f"got {type(aggregate)}"
-        )
-
     return aggregate
 
-
-# ---------------------------------------------------------------------------
-# Exported symbols
-# ---------------------------------------------------------------------------
-
-__all__ = [
-    'Aggregation',
-    'Sum',
-    'Mean',
-    'Max',
-    'Min',
-    'get_aggregation',
-]

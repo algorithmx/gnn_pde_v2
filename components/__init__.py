@@ -49,12 +49,30 @@ from .layers import (
     make_residual,
 )
 from .processors import (
-    MessagePassingBlock,
+    MessagePassingBase,
     GraphNetBlock, GraphNetProcessor,
     EdgeConditionedConvBlock,
     EdgeConvBlock,
     GENBlock,
     GlobalGraphNetBlock, GlobalGraphNetProcessor,
+)
+from .edge_processors import (
+    FullEdgeMessageProcessor,
+    VectorEdgeMessageProcessor,
+    ScalarEdgeMessageProcessor,
+    LowRankEdgeMessageProcessor,
+)
+from .node_updaters import (
+    ConcatMLPNodeUpdater,
+    RootWeightNodeUpdater,
+    PassThroughNodeUpdater,
+    ResidualMLPNodeUpdater,
+    NodeUpdaterFactory,
+    concat_mlp_factory,
+    root_weight_factory,
+    pass_through_factory,
+    residual_mlp_factory,
+    default_node_updater_factory,
 )
 from .gcn import GCNBlock, GCNBlockWithEdgeFeatures
 from .decoders import MLPDecoder, IndependentMLPDecoder
@@ -95,6 +113,7 @@ from .spectral import (
 from ..core.protocols import (
     GraphEncoder,
     GraphProcessor,
+    EdgeMessageProcessor,
     NodeDecoder,
     QueryDecoder,
     Decoder,
@@ -107,14 +126,30 @@ from ..core.protocols import (
 __all__ = [
     # Encoders
     "FourierFeatureEncoder",
+    # Node updaters
+    "ConcatMLPNodeUpdater",
+    "RootWeightNodeUpdater",
+    "PassThroughNodeUpdater",
+    "ResidualMLPNodeUpdater",
+    # Node updater factories
+    "NodeUpdaterFactory",
+    "concat_mlp_factory",
+    "root_weight_factory",
+    "pass_through_factory",
+    "residual_mlp_factory",
+    "default_node_updater_factory",
     # Layers (residual connections)
     "Residual",
     "GatedResidual",
     "make_residual",
     # Processors
-    "MessagePassingBlock",
+    "MessagePassingBase",
     "GraphNetBlock",
     "EdgeConditionedConvBlock",
+    "FullEdgeMessageProcessor",
+    "VectorEdgeMessageProcessor",
+    "ScalarEdgeMessageProcessor",
+    "LowRankEdgeMessageProcessor",
     "EdgeConvBlock",
     "GENBlock",
     "GlobalGraphNetBlock",
@@ -168,6 +203,7 @@ __all__ = [
     # Structural protocols
     "GraphEncoder",
     "GraphProcessor",
+    "EdgeMessageProcessor",
     "NodeDecoder",
     "QueryDecoder",
     "Decoder",

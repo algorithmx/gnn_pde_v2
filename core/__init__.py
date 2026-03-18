@@ -26,6 +26,7 @@ from .protocols import (
     ConditioningProtocol,
     GraphEncoder,
     GraphProcessor,
+    NodeUpdateStrategy,
     NodeDecoder,
     QueryDecoder,
     Decoder,

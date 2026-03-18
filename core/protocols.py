@@ -144,6 +144,55 @@ class GraphProcessor(Protocol):
 
 
 @runtime_checkable
+class EdgeMessageProcessor(Protocol):
+    """Protocol for edge-conditioned message transforms.
+
+    Implementations are expected to be used as fixed submodules inside
+    :class:`~gnn_pde_v2.components.EdgeConditionedConvBlock`. They receive
+    sender node features and the per-edge weights produced by an external
+    network, then return transformed messages of shape ``[E, latent_dim]``.
+
+    Notes:
+        - The protocol is intentionally minimal for compile-friendliness.
+        - Implementations should also be ``nn.Module`` instances in practice,
+          so they participate correctly in module registration and
+          ``torch.compile()`` specialization.
+        - Shape correctness is verified at block construction time via a
+          full pipeline check; processors do not need to perform their own
+          runtime shape assertions.
+    """
+
+    latent_dim: int
+
+    @property
+    def weight_out_dim(self) -> int: ...
+
+    def forward(self, src_x: Tensor, edge_weights: Tensor) -> Tensor: ...
+
+
+@runtime_checkable
+class NodeUpdateStrategy(Protocol):
+    """Protocol for composable node-update strategies in message passing.
+
+    Implementations transform a node's current features and its aggregated
+    incoming messages into updated node features.  They are injected into
+    :class:`~gnn_pde_v2.components.processors.MessagePassingBase` subclasses
+    so that the node-update rule can be swapped without touching the rest of
+    the message-passing logic.
+
+    Notes:
+        - Implementations should also be ``nn.Module`` instances so they
+          participate in parameter registration and ``torch.compile()``.
+        - The protocol deliberately takes only ``nodes`` and ``aggregated``
+          (not the full graph) to stay compile-friendly and simple.
+    """
+
+    latent_dim: int
+
+    def forward(self, nodes: Tensor, aggregated: Tensor) -> Tensor: ...
+
+
+@runtime_checkable
 class NodeDecoder(Protocol):
     """Protocol for decoders that output at fixed node positions.
     
@@ -249,6 +298,7 @@ __all__ = [
     # Graph-world
     "GraphEncoder",
     "GraphProcessor",
+    "EdgeMessageProcessor",
     "NodeDecoder",
     "QueryDecoder",
     "Decoder",  # Backwards-compatible alias

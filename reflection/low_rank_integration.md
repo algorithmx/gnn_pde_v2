@@ -50,7 +50,7 @@ For d=64, r=8:
 Added `low_rank` parameter to `EdgeConditionedConvBlock`:
 
 ```python
-class EdgeConditionedConvBlock(MessagePassingBlock):
+class EdgeConditionedConvBlock(MessagePassingBase):
     def __init__(
         self,
         latent_dim: int,

@@ -23,7 +23,7 @@ graph TB
     end
 
     subgraph "Components Layer"
-        PROC[components.processors<br/>GraphNetBlock, MessagePassingBlock, GENBlock]
+        PROC[components.processors<br/>GraphNetBlock, MessagePassingBase, GENBlock]
         GCN[components.gcn<br/>GCNBlock, GCNBlockWithEdgeFeatures]
         TRANS[components.transformer<br/>TransformerBlock, TransformerProcessor]
         ATTN[components.attention<br/>MultiHeadAttention, PhysicsTokenAttention, QKNorm, SparseGraphAttention]
@@ -247,7 +247,7 @@ from gnn_pde_v2.core.protocols import (
 ### Processors (Graph-based)
 | Module | Description |
 |--------|-------------|
-| `MessagePassingBlock` | Abstract base for graph message passing |
+| `MessagePassingBase` | Abstract base for graph message passing |
 | `GraphNetBlock` | DeepMind-style node/edge update |
 | `EdgeConditionedConvBlock` | Edge-conditioned convolution |
 | `GENBlock` | Graph Edges Networks block |
@@ -382,7 +382,7 @@ from gnn_pde_v2.components import (
     # Layers
     Residual, GatedResidual, make_residual,
     # Processors
-    MessagePassingBlock, GraphNetBlock, GraphNetProcessor,
+    MessagePassingBase, GraphNetBlock, GraphNetProcessor,
     EdgeConditionedConvBlock, EdgeConvBlock, GENBlock,
     GlobalGraphNetBlock, GlobalGraphNetProcessor,
     GCNBlock, GCNBlockWithEdgeFeatures,

@@ -34,7 +34,6 @@ class GraphUNetBlock(nn.Module):
         n_layers: int = 2,
         activation: str = "gelu",
         pool_ratio: float = 1.0,
-        aggregate_fn: Optional[Callable] = None,
     ):
         super().__init__()
         self.latent_dim = latent_dim
@@ -46,7 +45,6 @@ class GraphUNetBlock(nn.Module):
                 latent_dim=latent_dim,
                 hidden_dim=hidden_dim,
                 activation=activation,
-                aggregate_fn=aggregate_fn,
             )
             for _ in range(n_layers)
         ])
@@ -127,7 +125,6 @@ class GraphUNetProcessor(nn.Module):
         n_layers_per_level: int = 2,
         skip_connection: str = "add",
         activation: str = "gelu",
-        aggregate_fn: Optional[Callable] = None,
     ):
         super().__init__()
         self.latent_dim = latent_dim
@@ -146,7 +143,6 @@ class GraphUNetProcessor(nn.Module):
                     n_layers=n_layers_per_level,
                     activation=activation,
                     pool_ratio=pool_ratio,
-                    aggregate_fn=aggregate_fn,
                 )
             )
         
@@ -161,7 +157,6 @@ class GraphUNetProcessor(nn.Module):
                     n_layers=n_layers_per_level,
                     activation=activation,
                     pool_ratio=1.0,  # No pooling
-                    aggregate_fn=aggregate_fn,
                 )
             )
             

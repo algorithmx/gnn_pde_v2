@@ -36,8 +36,10 @@ from gnn_pde_v2.core import (
 )
 from gnn_pde_v2.components import (
     EdgeConditionedConvBlock,
+    FullEdgeMessageProcessor,
     GraphNetProcessor,
     IndependentMLPDecoder,
+    LowRankEdgeMessageProcessor,
 )
 from gnn_pde_v2.models import EncodeProcessDecode
 
@@ -81,7 +83,7 @@ class PostNormEdgeConditionedBlock(nn.Module):
         output = PReLU(aggregated)
     
     Now supports memory-efficient low-rank approximation via the framework's
-    built-in 'low_rank' edge_weight_type.
+    built-in edge processor plugins.
     
     Args:
         latent_dim: Hidden dimension (transchannel)
@@ -106,12 +108,11 @@ class PostNormEdgeConditionedBlock(nn.Module):
         self.latent_dim = latent_dim
         self.low_rank = low_rank
         
-        # Determine edge weight type based on low_rank
-        if low_rank > 0:
-            edge_weight_type = 'low_rank'
-            assert low_rank <= latent_dim, f"low_rank ({low_rank}) must be <= latent_dim ({latent_dim})"
-        else:
-            edge_weight_type = 'full'
+        edge_processor = (
+            LowRankEdgeMessageProcessor(latent_dim, low_rank)
+            if low_rank > 0
+            else FullEdgeMessageProcessor(latent_dim)
+        )
         
         # Core edge-conditioned message passing
         # Note: Framework's EdgeConditionedConvBlock uses 2-layer edge MLP
@@ -119,13 +120,17 @@ class PostNormEdgeConditionedBlock(nn.Module):
         self.conv = EdgeConditionedConvBlock(
             latent_dim=latent_dim,
             edge_latent_dim=edge_dim,
-            hidden_dim=kernel_width,
-            edge_weight_type=edge_weight_type,
-            low_rank=low_rank if low_rank > 0 else 0,
+            edge_weight_net=MLP(
+                in_dim=edge_dim,
+                out_dim=edge_processor.weight_out_dim,
+                hidden_dims=[kernel_width],
+                activation='relu',
+                use_layer_norm=False,
+            ),
+            edge_processor=edge_processor,
             aggregate='mean',              # Mean aggregation (matches original)
             root_weight=False,             # Original doesn't use root weight
             bias=False,                    # Original doesn't use bias
-            activation='relu',             # Internal edge MLP activation
         )
         
         # Custom initialization for edge MLP (std=0.1 for stable residuals)
@@ -183,7 +188,7 @@ class GNNSolverSimplified(AutoRegisterModel, name='gnn_solver_simple', namespace
     3. Decoder: 6 parallel MLPs for multi-component output
     
     Now supports memory-efficient low-rank approximation via the framework's
-    built-in EdgeConditionedConvBlock with edge_weight_type='low_rank'.
+    built-in EdgeConditionedConvBlock with ``LowRankEdgeMessageProcessor``.
     
     Args:
         in_dim: Input feature dimension
@@ -243,7 +248,6 @@ class GNNSolverSimplified(AutoRegisterModel, name='gnn_solver_simple', namespace
         # - Multi-layer stacking
         # - Gradient checkpointing (if use_checkpoint=True)
         # - Optional residual connections (disabled to match original)
-        # Note: aggregate_fn is deprecated, use aggregation in block directly
         processor = GraphNetProcessor(
             latent_dim=latent_dim,
             n_layers=num_layers,
