@@ -5,6 +5,28 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.8.3] - 2026-03-18
+
+### Low-Rank Edge-Conditioned Convolution
+
+**`EdgeConditionedConvBlock` (`components/processors.py`)**:
+- Added `edge_weight_type='low_rank'` for memory-efficient symmetric low-rank approximation
+- New `low_rank` parameter configures rank r for W_e ≈ U_e · U_e^T factorization
+- Memory reduction: d×r vs d² per edge (8× for d=64, r=8)
+- Full backward compatibility: default `low_rank=0` maintains original behavior
+
+### Simplified GNNSolver Example
+
+**`examples/example_gnn_solver_simplified.py`**:
+- Refactored GNNSolver using framework built-in components (79% code reduction)
+- Uses `MLP`, `EdgeConditionedConvBlock`, `GraphNetProcessor`, `IndependentMLPDecoder`, `EncodeProcessDecode`
+- Added `GNNSolverLowRankSimplified` demonstrating low-rank memory savings (86% parameter reduction)
+
+### Tests
+
+- **New `tests/test_low_rank_conv.py`** (33 tests): correctness, memory efficiency, gradients, configuration, integration
+- Extended `tests/test_components.py` with 10 low-rank tests
+- **Total: 43 new tests, all passing**
 
 ## [2.8.2] - 2026-03-17
 

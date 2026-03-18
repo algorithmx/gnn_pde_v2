@@ -281,12 +281,27 @@ class EdgeConditionedConvBlock(MessagePassingBlock):
     Edge Feature Strategy:
         Uses explicit edge attributes as input to weight network:
         - edge_attr → MLP → weight tensor → multiply with sender node
-        - Three weight types available: 'full', 'vector', 'scalar'
+        - Four weight types available: 'full', 'vector', 'scalar', 'low_rank'
     
     Weight Generation Modes:
         - ``'full'``: Per-edge [H, H] matrix (full transformation)
         - ``'vector'``: Per-edge [H] vector (channel-wise scaling)
         - ``'scalar'``: Per-edge [1] scalar (global scaling)
+        - ``'low_rank'``: Symmetric low-rank approximation W_e ≈ U_e · U_e^T
+    
+    Low-Rank Mode:
+        Memory-efficient symmetric factorization for large latent dimensions.
+        Instead of computing full d×d weight matrices, computes factorized 
+        U_e ∈ R^{d×r} where r << d.
+        
+        Message computation: ``M_e = U_e · U_e^T · x_j``
+        
+        Memory reduction: d×r vs d² (ratio = r/d)
+        For d=64, r=8: 512 values vs 4096 values (8× reduction)
+        
+        The symmetric factorization produces positive semi-definite weight 
+        matrices and may better match physical symmetries in Green's function 
+        kernels.
     
     Aggregation:
         Configurable via ``aggregate`` parameter. Default is sum aggregation.
@@ -306,7 +321,11 @@ class EdgeConditionedConvBlock(MessagePassingBlock):
         latent_dim: Dimension for node features.
         edge_latent_dim: Dimension for edge features.
         hidden_dim: Hidden dimension for edge weight network.
-        edge_weight_type: Weight generation mode. Options: ``'full'``, ``'vector'``, ``'scalar'``.
+        edge_weight_type: Weight generation mode. Options: ``'full'``, ``'vector'``, 
+            ``'scalar'``, ``'low_rank'``.
+        low_rank: Rank for low-rank approximation when ``edge_weight_type='low_rank'``.
+            Must be <= latent_dim. Use values like latent_dim//8 to latent_dim//4 
+            for memory savings. Ignored for other weight types.
         aggregate: Aggregation strategy. Options: ``'sum'``, ``'mean'``, ``'max'``, ``'min'``,
             or an Aggregation instance, or a custom callable. Default is ``'sum'``.
         aggregate_fn: Deprecated. Use ``aggregate`` instead.
@@ -328,6 +347,14 @@ class EdgeConditionedConvBlock(MessagePassingBlock):
         # Scalar gating (global scaling)
         block = EdgeConditionedConvBlock(latent_dim=128, edge_latent_dim=16, edge_weight_type='scalar')
         
+        # Low-rank symmetric factorization (memory-efficient)
+        block = EdgeConditionedConvBlock(
+            latent_dim=128, 
+            edge_latent_dim=16, 
+            edge_weight_type='low_rank',
+            low_rank=16,  # r=16 for d=128 gives 8× memory reduction
+        )
+        
         # Custom aggregation
         block = EdgeConditionedConvBlock(latent_dim=128, edge_latent_dim=16, aggregate='max')
     """
@@ -340,6 +367,7 @@ class EdgeConditionedConvBlock(MessagePassingBlock):
         edge_latent_dim: int,
         hidden_dim: int = 128,
         edge_weight_type: str = 'full',
+        low_rank: int = 0,
         aggregate: Union[Aggregation, Literal['sum', 'mean', 'max', 'min'], Callable] = 'sum',
         aggregate_fn: Optional[Callable] = None,  # Deprecated, use aggregate
         root_weight: bool = True,
@@ -358,6 +386,13 @@ class EdgeConditionedConvBlock(MessagePassingBlock):
             out_dim = latent_dim
         elif edge_weight_type == 'scalar':
             out_dim = 1
+        elif edge_weight_type == 'low_rank':
+            if low_rank <= 0:
+                raise ValueError(f"low_rank must be positive when edge_weight_type='low_rank', got {low_rank}")
+            if low_rank > latent_dim:
+                raise ValueError(f"low_rank ({low_rank}) must be <= latent_dim ({latent_dim})")
+            out_dim = latent_dim * low_rank
+            self.low_rank = low_rank
         else:
             raise ValueError(f"Unknown edge_weight_type: {edge_weight_type}")
 
@@ -401,9 +436,19 @@ class EdgeConditionedConvBlock(MessagePassingBlock):
         src_x = graph.nodes[graph.senders]  # [E, H]
 
         w = self.edge_weight_net(graph.edges)
+        
         if self.edge_weight_type == 'full':
             W = w.view(-1, H, H)
             msg = torch.bmm(src_x.unsqueeze(1), W).squeeze(1)  # [E, H]
+        elif self.edge_weight_type == 'low_rank':
+            # Symmetric low-rank message computation: M_e = U_e · U_e^T · x_j
+            # Step 1: Reshape to get U_e factors [E, d, r]
+            edge_u = w.view(-1, H, self.low_rank)  # [E, d, r]
+            # Step 2: Project to rank-r space: h_e = U_e^T · x_j
+            # x_j: [E, d], U_e: [E, d, r] -> h_e: [E, r]
+            h_e = torch.einsum('ed,edr->er', src_x, edge_u)
+            # Step 3: Project back to d-dim: M_e = U_e · h_e
+            msg = torch.einsum('er,edr->ed', h_e, edge_u)  # [E, d]
         else:
             msg = src_x * w  # [E, H]
 

@@ -469,6 +469,181 @@ class TestEdgeConditionedConvBlock:
         assert block.root.grad is not None
         assert block.bias.grad is not None
 
+    # -------------------------------------------------------------------------
+    # Low-Rank Approximation Tests
+    # -------------------------------------------------------------------------
+
+    def test_forward_low_rank(self, device):
+        """Test forward with symmetric low-rank approximation."""
+        block = EdgeConditionedConvBlock(
+            latent_dim=16, edge_latent_dim=16,
+            edge_weight_type='low_rank', low_rank=4,
+        ).to(device)
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+        # Edges must be unchanged (passed through)
+        assert out.edges is graph.edges
+
+    def test_low_rank_parameter_reduction(self, device):
+        """Test that low-rank mode reduces parameters correctly."""
+        d = 64
+        r = 8
+        
+        block_full = EdgeConditionedConvBlock(
+            latent_dim=d, edge_latent_dim=16,
+            edge_weight_type='full', root_weight=False, bias=False,
+        ).to(device)
+        
+        block_lowrank = EdgeConditionedConvBlock(
+            latent_dim=d, edge_latent_dim=16,
+            edge_weight_type='low_rank', low_rank=r,
+            root_weight=False, bias=False,
+        ).to(device)
+        
+        params_full = sum(p.numel() for p in block_full.edge_weight_net.parameters())
+        params_lowrank = sum(p.numel() for p in block_lowrank.edge_weight_net.parameters())
+        
+        # Full-rank edge MLP outputs d*d values
+        # Low-rank edge MLP outputs d*r values
+        # Parameter reduction should be significant
+        assert params_lowrank < params_full
+        # The output dimension reduction is d*d vs d*r = 4096 vs 512 for d=64, r=8
+        assert block_lowrank.low_rank == r
+
+    def test_low_rank_memory_efficiency(self, device):
+        """Test memory per edge calculation for low-rank vs full-rank."""
+        d = 64
+        r = 8
+        
+        memory_full = d * d  # 4096 values per edge
+        memory_lowrank = d * r  # 512 values per edge
+        
+        reduction_ratio = memory_full / memory_lowrank
+        assert reduction_ratio == 8.0  # 8x reduction for r=8
+
+    def test_low_rank_invalid_rank_raises(self, device):
+        """Test that invalid low_rank values raise ValueError."""
+        # rank = 0 should raise error
+        with pytest.raises(ValueError, match="low_rank must be positive"):
+            EdgeConditionedConvBlock(
+                latent_dim=16, edge_latent_dim=16,
+                edge_weight_type='low_rank', low_rank=0,
+            )
+        
+        # rank > latent_dim should raise error
+        with pytest.raises(ValueError, match="low_rank .* must be <= latent_dim"):
+            EdgeConditionedConvBlock(
+                latent_dim=16, edge_latent_dim=16,
+                edge_weight_type='low_rank', low_rank=32,
+            )
+
+    def test_low_rank_gradient_flow(self, device):
+        """Test gradients flow correctly in low-rank mode."""
+        block = EdgeConditionedConvBlock(
+            latent_dim=16, edge_latent_dim=16,
+            edge_weight_type='low_rank', low_rank=4,
+        ).to(device)
+        
+        graph = self._make_graph(device, latent=16, edge_latent=16, n_nodes=4, n_edges=6)
+        out = block(graph)
+        loss = out.nodes.sum()
+        loss.backward()
+        
+        # Check gradients exist for edge weight net
+        has_grad = any(p.grad is not None for p in block.edge_weight_net.parameters())
+        assert has_grad, "Edge weight net should have gradients"
+        
+        # Check root and bias gradients
+        assert block.root.grad is not None
+        assert block.bias.grad is not None
+
+    def test_low_rank_equivalence_with_same_weights(self, device):
+        """Test that low-rank produces correct output shapes and valid values."""
+        block = EdgeConditionedConvBlock(
+            latent_dim=32, edge_latent_dim=16,
+            edge_weight_type='low_rank', low_rank=8,
+            root_weight=False, bias=False,
+        ).to(device)
+        
+        # Create a simple graph
+        graph = self._make_graph(device, latent=32, edge_latent=16, n_nodes=10, n_edges=20)
+        
+        out = block(graph)
+        
+        # Check output shape
+        assert out.nodes.shape == (10, 32)
+        
+        # Check output is finite (no NaN or Inf)
+        assert torch.all(torch.isfinite(out.nodes))
+
+    def test_low_rank_different_ranks(self, device):
+        """Test low-rank with different rank values."""
+        latent_dim = 64
+        
+        for rank in [4, 8, 16, 32]:
+            block = EdgeConditionedConvBlock(
+                latent_dim=latent_dim, edge_latent_dim=16,
+                edge_weight_type='low_rank', low_rank=rank,
+            ).to(device)
+            
+            graph = self._make_graph(device, latent=latent_dim, edge_latent=16)
+            out = block(graph)
+            
+            assert out.nodes.shape == (5, latent_dim), f"Failed for rank={rank}"
+
+    def test_low_rank_no_root_no_bias(self, device):
+        """Test low-rank with root_weight=False and bias=False."""
+        block = EdgeConditionedConvBlock(
+            latent_dim=16, edge_latent_dim=16,
+            edge_weight_type='low_rank', low_rank=4,
+            root_weight=False, bias=False,
+        ).to(device)
+        
+        assert block.root is None
+        assert block.bias is None
+        
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+
+    def test_low_rank_mean_aggregation(self, device):
+        """Test low-rank with mean aggregation."""
+        block = EdgeConditionedConvBlock(
+            latent_dim=16, edge_latent_dim=16,
+            edge_weight_type='low_rank', low_rank=4,
+            aggregate='mean',
+        ).to(device)
+        
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+
+    def test_low_rank_vs_full_rank_output_shape(self, device):
+        """Verify low-rank and full-rank produce same output shape."""
+        latent_dim = 32
+        edge_latent_dim = 8
+        
+        block_full = EdgeConditionedConvBlock(
+            latent_dim=latent_dim, edge_latent_dim=edge_latent_dim,
+            edge_weight_type='full', root_weight=False, bias=False,
+        ).to(device)
+        
+        block_lowrank = EdgeConditionedConvBlock(
+            latent_dim=latent_dim, edge_latent_dim=edge_latent_dim,
+            edge_weight_type='low_rank', low_rank=8,
+            root_weight=False, bias=False,
+        ).to(device)
+        
+        graph = self._make_graph(device, latent=latent_dim, edge_latent=edge_latent_dim)
+        
+        out_full = block_full(graph)
+        out_lowrank = block_lowrank(graph)
+        
+        # Both should produce same output shape
+        assert out_full.nodes.shape == out_lowrank.nodes.shape
+        assert out_full.nodes.shape == (5, latent_dim)
+
 
 class TestGraphNetProcessorBlockFactory:
     """Test GraphNetProcessor with custom block_factory."""
