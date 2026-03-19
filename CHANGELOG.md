@@ -6,6 +6,38 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.9.0] - 2026-03-19
+
+### Breaking Changes
+
+**EdgeConvBlock Legacy API Removal**
+
+The legacy `edge_feature_mode`, `edge_input_dim`, and `edge_mlp` parameters have been
+completely removed from `EdgeConvBlock`. Use the new composable assembler API:
+
+| Before (Legacy) | After (New) |
+|-----------------|-------------|
+| `EdgeConvBlock(128, edge_feature_mode='concat')` | `EdgeConvBlock(128, edge_assembler=ConcatAssembler(128))` |
+| `EdgeConvBlock(128, edge_feature_mode='difference_only')` | `EdgeConvBlock(128, edge_assembler=DifferenceOnlyAssembler(128))` |
+| `EdgeConvBlock(128, edge_feature_mode='concat_with_edges', edge_input_dim=3)` | `EdgeConvBlock(128, edge_assembler=ConcatWithEdgesAssembler(128, 3))` |
+| `EdgeConvBlock(128, edge_mlp=custom_mlp)` | `EdgeConvBlock(128, edge_transform=custom_transform)` |
+
+**Removed from `EdgeConvBlock`:**
+- `edge_feature_mode` parameter
+- `edge_input_dim` parameter  
+- `edge_mlp` parameter
+- `EDGE_FEATURE_MODES` constant
+- `_create_assembler_from_mode()` method
+- `_edge_feature_dim()` method
+- `_get_assembler_class_name()` method
+
+**Default behavior preserved:**
+```python
+# This still works exactly as before (DGCNN default)
+block = EdgeConvBlock(latent_dim=128)  # Uses NodeDifferenceAssembler
+```
+
+
 ## [2.8.5] - 2026-03-19
 
 ### EdgeConvBlock Composable Assemblers
