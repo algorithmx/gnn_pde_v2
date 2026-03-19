@@ -62,6 +62,13 @@ from .edge_processors import (
     ScalarEdgeMessageProcessor,
     LowRankEdgeMessageProcessor,
 )
+from .edge_assemblers import (
+    EdgeFeatureAssembler,
+    NodeDifferenceAssembler,
+    ConcatAssembler,
+    DifferenceOnlyAssembler,
+    ConcatWithEdgesAssembler,
+)
 from .node_updaters import (
     ConcatMLPNodeUpdater,
     RootWeightNodeUpdater,
@@ -150,6 +157,12 @@ __all__ = [
     "VectorEdgeMessageProcessor",
     "ScalarEdgeMessageProcessor",
     "LowRankEdgeMessageProcessor",
+    # Edge assemblers
+    "EdgeFeatureAssembler",
+    "NodeDifferenceAssembler",
+    "ConcatAssembler",
+    "DifferenceOnlyAssembler",
+    "ConcatWithEdgesAssembler",
     "EdgeConvBlock",
     "GENBlock",
     "GlobalGraphNetBlock",

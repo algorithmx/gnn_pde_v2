@@ -27,7 +27,7 @@ from ..core.graph import GraphsTuple
 from ..core.functional import aggregate_edges, broadcast_global, aggregate_to_global, scatter_softmax
 from ..core.mlp import MLP
 from ..core.aggregation import Aggregation, Sum, get_aggregation
-from ..core.protocols import EdgeMessageProcessor
+from ..core.protocols import EdgeMessageProcessor, EdgeFeatureAssembler
 from .edge_processors import (
     _EdgeMessageProcessorBase,
     FullEdgeMessageProcessor,
@@ -401,55 +401,119 @@ class EdgeConditionedConvBlock(MessagePassingBase):
 # ----------------------------------------------------------------------------
 
 class EdgeConvBlock(MessagePassingBase):
-    """
-    EdgeConv-style message passing (DGCNN / Point Cloud Networks).
+    """EdgeConv-style message passing (DGCNN / Point Cloud Networks).
 
-    ``m_ij = edge_mlp(features(v_i, v_j, e_ij))`` → aggregate → pass-through node update.
-    Edges are **not** updated.  Default aggregation is **max**.
+    ``m_ij = edge_transform(features(v_i, v_j, e_ij))`` → aggregate → node update.
+    Edges are **not** updated. Default aggregation is **max**.
 
-    Edge Feature Modes (``edge_feature_mode``):
-        - ``'node_difference'`` (default): ``[v_i; v_j - v_i]``  — dim ``2D``
-        - ``'concat'``: ``[v_i; v_j]``  — dim ``2D``
-        - ``'difference_only'``: ``v_j - v_i``  — dim ``D``
-        - ``'concat_with_edges'``: ``[v_i; v_j - v_i; e_ij]``  — dim ``2D + edge_input_dim``
-          (requires ``edge_input_dim``)
+    This block now supports **pluggable edge feature assemblers** for maximum
+    flexibility while maintaining full backward compatibility with the legacy API.
+
+    New Flexible API (Recommended)
+    ------------------------------
+    Use :class:`~gnn_pde_v2.components.EdgeFeatureAssembler` subclasses to
+    customize edge feature construction::
+
+        from gnn_pde_v2.components import (
+            EdgeConvBlock,
+            NodeDifferenceAssembler,
+            ConcatWithEdgesAssembler,
+        )
+        from gnn_pde_v2.core import MLP
+
+        # Custom assembler with custom transform
+        block = EdgeConvBlock(
+            latent_dim=128,
+            edge_assembler=NodeDifferenceAssembler(128),
+            edge_transform=MLP(256, 128, [128, 128], 'relu'),
+        )
+
+        # With edge attributes
+        block = EdgeConvBlock(
+            latent_dim=128,
+            edge_assembler=ConcatWithEdgesAssembler(128, edge_dim=3),
+        )
+
+    Legacy API (Fully Supported)
+    ----------------------------
+    All existing code continues to work unchanged::
+
+        # Default: node_difference mode
+        block = EdgeConvBlock(latent_dim=128)
+
+        # Different assembly mode
+        block = EdgeConvBlock(latent_dim=128, edge_feature_mode='concat')
+
+        # With edge attributes
+        block = EdgeConvBlock(
+            latent_dim=128,
+            edge_feature_mode='concat_with_edges',
+            edge_input_dim=3,
+        )
+
+        # Custom edge MLP
+        block = EdgeConvBlock(latent_dim=128, edge_mlp=custom_mlp)
+
+    Edge Feature Modes (Legacy)
+    ---------------------------
+    When using the legacy ``edge_feature_mode`` parameter:
+
+    - ``'node_difference'`` (default): ``[v_i; v_j - v_i]`` — dim ``2D``
+    - ``'concat'``: ``[v_i; v_j]`` — dim ``2D``
+    - ``'difference_only'``: ``v_j - v_i`` — dim ``D``
+    - ``'concat_with_edges'``: ``[v_i; v_j - v_i; e_ij]`` — dim ``2D + edge_input_dim``
 
     Args:
         latent_dim: Node feature dimension (``D``).
-        hidden_dim: Hidden dim for the default edge MLP (ignored if ``edge_mlp`` given).
-        aggregate: ``'sum'``, ``'mean'``, ``'max'`` (default), ``'min'``, or ``Aggregation``.
+        hidden_dim: Hidden dim for the default edge MLP (ignored if
+            ``edge_transform`` or ``edge_mlp`` given).
+        aggregate: ``'sum'``, ``'mean'``, ``'max'`` (default), ``'min'``,
+            or ``Aggregation``.
         activation: Activation for the default edge MLP.
-        edge_feature_mode: Feature assembly mode (see above).
-        edge_input_dim: Explicit edge attribute dim; required for ``'concat_with_edges'``.
-        edge_mlp: Custom ``nn.Module`` mapping assembled features → ``[E, D]``.
 
-    Example::
+        # Legacy parameters (for backward compatibility)
+        edge_feature_mode: Feature assembly mode. Ignored if ``edge_assembler``
+            is provided.
+        edge_input_dim: Explicit edge attribute dim; required for
+            ``'concat_with_edges'`` mode.
+        edge_mlp: Legacy alias for ``edge_transform``. Custom ``nn.Module``
+            mapping assembled features → ``[E, D]``.
 
-        block = EdgeConvBlock(latent_dim=128)                        # DGCNN defaults
-        block = EdgeConvBlock(latent_dim=128, aggregate='sum')       # different aggregation
-        block = EdgeConvBlock(latent_dim=128, edge_feature_mode='concat_with_edges',
-                              edge_input_dim=3)                      # with edge attrs
+        # New flexible parameters
+        edge_assembler: Pluggable edge feature assembler. If provided, takes
+            precedence over ``edge_feature_mode``.
+        edge_transform: Custom ``nn.Module`` mapping assembled edge features
+            to messages. If provided, takes precedence over default MLP.
+        node_updater: Optional custom node update strategy.
+
+    Note:
+        When both legacy and new parameters are provided, the new parameters
+        (``edge_assembler``, ``edge_transform``) take precedence.
     """
 
-    #: Supported edge-feature mode labels.
+    #: Supported edge-feature mode labels (legacy API).
     EDGE_FEATURE_MODES = (
         'node_difference',    # [v_i; v_j - v_i]           → 2 * latent_dim
         'concat',             # [v_i; v_j]                 → 2 * latent_dim
         'difference_only',    # v_j - v_i                  → latent_dim
         'concat_with_edges',  # [v_i; v_j - v_i; e_ij]    → 2 * latent_dim + edge_input_dim
     )
-    
+
     updates_edges = False
-    
+
     def __init__(
         self,
         latent_dim: int,
         hidden_dim: int = 128,
-        aggregate: Union[Aggregation, Literal['sum', 'mean', 'max', 'min']] = 'max',  # Default: max (original)
+        aggregate: Union[Aggregation, Literal['sum', 'mean', 'max', 'min']] = 'max',
         activation: str = 'relu',
+        # Legacy parameters (for backward compatibility)
         edge_feature_mode: str = 'node_difference',
         edge_input_dim: Optional[int] = None,
         edge_mlp: Optional[nn.Module] = None,
+        # New flexible parameters
+        edge_assembler: Optional[EdgeFeatureAssembler] = None,
+        edge_transform: Optional[nn.Module] = None,
         node_updater: Optional[nn.Module] = None,
     ):
         if node_updater is None:
@@ -459,28 +523,102 @@ class EdgeConvBlock(MessagePassingBase):
             aggregate=aggregate,
             node_updater=node_updater,
         )
-        
-        if edge_feature_mode not in self.EDGE_FEATURE_MODES:
-            raise ValueError(
-                f"Unknown edge_feature_mode={edge_feature_mode!r}. "
-                f"Supported: {self.EDGE_FEATURE_MODES}"
+
+        # Resolve edge assembler: new API takes precedence
+        if edge_assembler is not None:
+            self.edge_assembler = edge_assembler
+            self.edge_feature_mode = None  # Not using legacy mode
+            self.edge_input_dim = None
+        else:
+            # Legacy: validate and create assembler from mode string
+            if edge_feature_mode not in self.EDGE_FEATURE_MODES:
+                raise ValueError(
+                    f"Unknown edge_feature_mode={edge_feature_mode!r}. "
+                    f"Supported: {self.EDGE_FEATURE_MODES}"
+                )
+            self.edge_feature_mode = edge_feature_mode
+            self.edge_input_dim = edge_input_dim
+            self.edge_assembler = self._create_assembler_from_mode(
+                edge_feature_mode, latent_dim, edge_input_dim
             )
-        self.edge_feature_mode = edge_feature_mode
-        self.edge_input_dim = edge_input_dim
-        
-        mlp_in_dim = self._edge_feature_dim(
-            latent_dim, edge_feature_mode, edge_input_dim,
-        )
-        
-        if edge_mlp is not None:
-            self.edge_mlp = edge_mlp
+
+        # Resolve edge transform: new API takes precedence
+        if edge_transform is not None:
+            self.edge_transform = edge_transform
+        elif edge_mlp is not None:
+            self.edge_transform = edge_mlp  # Legacy alias
         else:
             # Default MLP: assembled edge features → message
-            self.edge_mlp = MLP(
-                in_dim=mlp_in_dim,
+            self.edge_transform = MLP(
+                in_dim=self.edge_assembler.out_dim,
                 out_dim=latent_dim,
                 hidden_dims=[hidden_dim],
                 activation=activation,
+            )
+
+        # Eager validation: ensure transform output matches latent_dim
+        self._verify_transform_output(latent_dim)
+
+    def _create_assembler_from_mode(
+        self,
+        mode: str,
+        latent_dim: int,
+        edge_input_dim: Optional[int],
+    ) -> 'EdgeFeatureAssembler':
+        """Create edge assembler from legacy mode string.
+
+        Args:
+            mode: One of the EDGE_FEATURE_MODES.
+            latent_dim: Node feature dimension.
+            edge_input_dim: Edge attribute dimension (for 'concat_with_edges').
+
+        Returns:
+            Instantiated EdgeFeatureAssembler.
+        """
+        from .edge_assemblers import (
+            NodeDifferenceAssembler,
+            ConcatAssembler,
+            DifferenceOnlyAssembler,
+            ConcatWithEdgesAssembler,
+        )
+
+        if mode == 'node_difference':
+            return NodeDifferenceAssembler(latent_dim)
+        elif mode == 'concat':
+            return ConcatAssembler(latent_dim)
+        elif mode == 'difference_only':
+            return DifferenceOnlyAssembler(latent_dim)
+        elif mode == 'concat_with_edges':
+            if edge_input_dim is None:
+                raise ValueError(
+                    "edge_input_dim is required when "
+                    "edge_feature_mode='concat_with_edges'"
+                )
+            return ConcatWithEdgesAssembler(latent_dim, edge_input_dim)
+        else:
+            raise ValueError(f"Unknown edge_feature_mode={mode!r}")
+
+    def _verify_transform_output(self, expected_dim: int) -> None:
+        """Eagerly verify edge_transform produces correct output dimension."""
+        # Create dummy tensors for verification
+        num_edges = 2
+        device = next(self.edge_transform.parameters(), torch.empty(0)).device
+        dtype = next(self.edge_transform.parameters(), torch.empty(0)).dtype
+
+        dummy_features = torch.randn(
+            num_edges, self.edge_assembler.out_dim,
+            device=device, dtype=dtype
+        )
+
+        with torch.no_grad():
+            output = self.edge_transform(dummy_features)
+
+        if output.shape != (num_edges, expected_dim):
+            raise ValueError(
+                f"edge_transform output shape mismatch: "
+                f"expected ({num_edges}, {expected_dim}), "
+                f"got {tuple(output.shape)}. "
+                f"Ensure out_dim={expected_dim} matches latent_dim."
             )
 
     @staticmethod
@@ -489,7 +627,11 @@ class EdgeConvBlock(MessagePassingBase):
         mode: str,
         edge_input_dim: Optional[int] = None,
     ) -> int:
-        """Return the feature dimension produced by *mode*."""
+        """Return the feature dimension produced by *mode* (legacy API).
+
+        This method is kept for backward compatibility.
+        New code should use the ``out_dim`` property of assemblers.
+        """
         if mode == 'node_difference':
             return 2 * latent_dim
         elif mode == 'concat':
@@ -510,29 +652,20 @@ class EdgeConvBlock(MessagePassingBase):
             )
 
     def _compute_edge_features(self, graph: GraphsTuple) -> torch.Tensor:
-        """Assemble per-edge feature vectors according to ``edge_feature_mode``."""
-        nodes = graph.nodes
-        v_i = nodes[graph.receivers]   # receiver node features
-        v_j = nodes[graph.senders]     # sender node features
-        
-        if self.edge_feature_mode == 'node_difference':
-            return torch.cat([v_i, v_j - v_i], dim=-1)
-        elif self.edge_feature_mode == 'concat':
-            return torch.cat([v_i, v_j], dim=-1)
-        elif self.edge_feature_mode == 'difference_only':
-            return v_j - v_i
-        elif self.edge_feature_mode == 'concat_with_edges':
-            return torch.cat([v_i, v_j - v_i, graph.edges], dim=-1)
-        else:
-            # Defensive; __init__ already validates
-            raise ValueError(f"Unknown edge_feature_mode={self.edge_feature_mode!r}")
-    
+        """Assemble per-edge feature vectors.
+
+        This method delegates to the edge_assembler and is kept for
+        backward compatibility. New code should call
+        ``edge_assembler(graph)`` directly.
+        """
+        return self.edge_assembler(graph)
+
     def compute_messages(
         self,
         graph: GraphsTuple,
     ) -> Tuple[torch.Tensor, None]:
-        edge_features = self._compute_edge_features(graph)
-        messages = self.edge_mlp(edge_features)
+        edge_features = self.edge_assembler(graph)
+        messages = self.edge_transform(edge_features)
         return messages, None  # Don't update edges
 
 

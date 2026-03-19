@@ -193,6 +193,37 @@ class NodeUpdateStrategy(Protocol):
 
 
 @runtime_checkable
+class EdgeFeatureAssembler(Protocol):
+    """Protocol for edge feature assembly strategies.
+
+    Implementations define how to construct per-edge feature vectors from
+    graph structure for use in :class:`~gnn_pde_v2.components.EdgeConvBlock`.
+
+    Satisfied by
+    :class:`~gnn_pde_v2.components.NodeDifferenceAssembler`,
+    :class:`~gnn_pde_v2.components.ConcatAssembler`, and other assembler
+    classes in :mod:`~gnn_pde_v2.components.edge_assemblers`.
+
+    The protocol requires:
+    - An :attr:`out_dim` property returning the output feature dimension
+    - A ``forward(graph: GraphsTuple) -> Tensor`` method that assembles edge features
+
+    Example::
+
+        from gnn_pde_v2.core.protocols import EdgeFeatureAssembler
+        from gnn_pde_v2.components import NodeDifferenceAssembler
+
+        assembler: EdgeFeatureAssembler = NodeDifferenceAssembler(128)
+        assert isinstance(assembler, EdgeFeatureAssembler)  # True at runtime
+    """
+
+    @property
+    def out_dim(self) -> int: ...
+
+    def forward(self, graph: GraphsTuple) -> Tensor: ...
+
+
+@runtime_checkable
 class NodeDecoder(Protocol):
     """Protocol for decoders that output at fixed node positions.
     
@@ -299,6 +330,7 @@ __all__ = [
     "GraphEncoder",
     "GraphProcessor",
     "EdgeMessageProcessor",
+    "EdgeFeatureAssembler",
     "NodeDecoder",
     "QueryDecoder",
     "Decoder",  # Backwards-compatible alias
