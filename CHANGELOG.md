@@ -6,6 +6,51 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 
+## [2.8.5] - 2026-03-19
+
+### EdgeConvBlock Composable Assemblers
+
+**New Edge Feature Assemblers** (`components/edge_assemblers.py`):
+- `EdgeFeatureAssembler`: Abstract base class for edge feature assembly strategies
+- `NodeDifferenceAssembler`: Assemble `[v_i; v_j - v_i]` — DGCNN default (2*D dims)
+- `ConcatAssembler`: Assemble `[v_i; v_j]` — simple concatenation (2*D dims)
+- `DifferenceOnlyAssembler`: Assemble `v_j - v_i` — difference only (D dims)
+- `ConcatWithEdgesAssembler`: Assemble `[v_i; v_j - v_i; e_ij]` — with edge attrs (2*D + edge_dim dims)
+
+**New Protocol** (`core/protocols.py`):
+- `EdgeFeatureAssembler`: Protocol for edge feature assembly strategies
+
+**EdgeConvBlock Updates** (`components/processors.py`):
+- New `edge_assembler` parameter for pluggable edge feature assembly
+- New `edge_transform` parameter (replaces `edge_mlp`)
+- **Deprecation warnings** added for legacy parameters:
+  - `edge_feature_mode` (non-default values trigger warning)
+  - `edge_mlp` (triggers warning, use `edge_transform` instead)
+- Full backward compatibility maintained during transition period
+
+**New Tests** (`tests/test_edge_assemblers.py`):
+- 20 comprehensive tests for all assembler classes
+- Tests for output dimensions, correctness, and edge cases
+- Integration tests with `EdgeConvBlock`
+
+**Migration Guide:**
+```python
+# Before (legacy API)
+block = EdgeConvBlock(latent_dim=128, edge_feature_mode='concat')
+block = EdgeConvBlock(latent_dim=128, edge_feature_mode='concat_with_edges', edge_input_dim=3)
+block = EdgeConvBlock(latent_dim=128, edge_mlp=custom_mlp)
+
+# After (new API)
+from gnn_pde_v2.components import ConcatAssembler, ConcatWithEdgesAssembler
+block = EdgeConvBlock(latent_dim=128, edge_assembler=ConcatAssembler(128))
+block = EdgeConvBlock(latent_dim=128, edge_assembler=ConcatWithEdgesAssembler(128, edge_dim=3))
+block = EdgeConvBlock(latent_dim=128, edge_transform=custom_transform)
+
+# Default behavior unchanged
+block = EdgeConvBlock(latent_dim=128)  # Still uses NodeDifferenceAssembler
+```
+
+
 ## [2.8.4] - 2026-03-18
 
 ### Composable Processor Architecture

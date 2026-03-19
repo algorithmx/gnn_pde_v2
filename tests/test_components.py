@@ -958,6 +958,86 @@ class TestEdgeConvBlock:
         """EdgeConvBlock must be a MessagePassingBase subclass."""
         assert issubclass(EdgeConvBlock, MessagePassingBase)
 
+    def test_explicit_assembler_node_difference(self, device):
+        """Test EdgeConvBlock with explicit NodeDifferenceAssembler."""
+        from gnn_pde_v2.components import NodeDifferenceAssembler
+        
+        assembler = NodeDifferenceAssembler(latent_dim=16)
+        block = EdgeConvBlock(
+            latent_dim=16,
+            edge_assembler=assembler,
+        ).to(device)
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+        assert isinstance(block.edge_assembler, NodeDifferenceAssembler)
+
+    def test_explicit_assembler_concat(self, device):
+        """Test EdgeConvBlock with ConcatAssembler."""
+        from gnn_pde_v2.components import ConcatAssembler
+        
+        block = EdgeConvBlock(
+            latent_dim=16,
+            edge_assembler=ConcatAssembler(16),
+        ).to(device)
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+        assert isinstance(block.edge_assembler, ConcatAssembler)
+
+    def test_explicit_assembler_difference_only(self, device):
+        """Test EdgeConvBlock with DifferenceOnlyAssembler."""
+        from gnn_pde_v2.components import DifferenceOnlyAssembler
+        
+        block = EdgeConvBlock(
+            latent_dim=16,
+            edge_assembler=DifferenceOnlyAssembler(16),
+        ).to(device)
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+        assert isinstance(block.edge_assembler, DifferenceOnlyAssembler)
+
+    def test_explicit_assembler_with_edges(self, device):
+        """Test EdgeConvBlock with ConcatWithEdgesAssembler."""
+        from gnn_pde_v2.components import ConcatWithEdgesAssembler
+        from gnn_pde_v2.core import MLP
+        
+        # Create graph with edge_dim=3
+        graph = GraphsTuple.from_flat(
+            nodes=torch.randn(5, 16, device=device),
+            edges=torch.randn(8, 3, device=device),  # edge_dim = 3
+            receivers=torch.tensor([1, 2, 3, 0, 1, 2, 3, 0], device=device),
+            senders=torch.tensor([0, 1, 2, 3, 0, 1, 2, 3], device=device),
+            n_node=torch.tensor([5], device=device),
+            n_edge=torch.tensor([8], device=device),
+        )
+        
+        block = EdgeConvBlock(
+            latent_dim=16,
+            edge_assembler=ConcatWithEdgesAssembler(latent_dim=16, edge_dim=3),
+            edge_transform=MLP(35, 16, [32], 'relu'),  # 2*16 + 3 = 35
+        ).to(device)
+        
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+        assert isinstance(block.edge_assembler, ConcatWithEdgesAssembler)
+
+    def test_custom_edge_transform(self, device):
+        """Test EdgeConvBlock with custom edge_transform."""
+        from gnn_pde_v2.core import MLP
+        
+        custom_transform = MLP(32, 16, [64, 64], 'gelu')
+        block = EdgeConvBlock(
+            latent_dim=16,
+            edge_transform=custom_transform,
+        ).to(device)
+        
+        graph = self._make_graph(device)
+        out = block(graph)
+        assert out.nodes.shape == (5, 16)
+        assert block.edge_transform is custom_transform
+
 
 class TestGlobalGraphNetBlock:
     """Test GlobalGraphNetBlock (full Graph Nets with globals)."""

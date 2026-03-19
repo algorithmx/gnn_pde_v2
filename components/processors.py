@@ -16,6 +16,7 @@ Two independent block families reflect distinct use cases:
 (edge → node → global) rather than the base 2-step template.
 """
 
+import warnings
 from abc import ABC, abstractmethod
 from typing import Callable, final, Final, Literal, Optional, Tuple, Union
 
@@ -536,6 +537,15 @@ class EdgeConvBlock(MessagePassingBase):
                     f"Unknown edge_feature_mode={edge_feature_mode!r}. "
                     f"Supported: {self.EDGE_FEATURE_MODES}"
                 )
+            # Deprecation warning for non-default legacy modes
+            if edge_feature_mode != 'node_difference':
+                warnings.warn(
+                    f"edge_feature_mode='{edge_feature_mode}' is deprecated. "
+                    f"Use edge_assembler={self._get_assembler_class_name(edge_feature_mode)}({latent_dim}) instead. "
+                    f"This parameter will be removed in a future version.",
+                    DeprecationWarning,
+                    stacklevel=2
+                )
             self.edge_feature_mode = edge_feature_mode
             self.edge_input_dim = edge_input_dim
             self.edge_assembler = self._create_assembler_from_mode(
@@ -546,6 +556,13 @@ class EdgeConvBlock(MessagePassingBase):
         if edge_transform is not None:
             self.edge_transform = edge_transform
         elif edge_mlp is not None:
+            # Deprecation warning for legacy edge_mlp parameter
+            warnings.warn(
+                "edge_mlp is deprecated. Use edge_transform instead. "
+                "This parameter will be removed in a future version.",
+                DeprecationWarning,
+                stacklevel=2
+            )
             self.edge_transform = edge_mlp  # Legacy alias
         else:
             # Default MLP: assembled edge features → message
@@ -597,6 +614,25 @@ class EdgeConvBlock(MessagePassingBase):
             return ConcatWithEdgesAssembler(latent_dim, edge_input_dim)
         else:
             raise ValueError(f"Unknown edge_feature_mode={mode!r}")
+
+    @staticmethod
+    def _get_assembler_class_name(mode: str) -> str:
+        """Return the assembler class name for a given legacy mode.
+
+        Used for deprecation warnings to guide users to the new API.
+
+        Args:
+            mode: One of the EDGE_FEATURE_MODES (except 'node_difference').
+
+        Returns:
+            String representation of the equivalent assembler class.
+        """
+        mapping = {
+            'concat': 'ConcatAssembler',
+            'difference_only': 'DifferenceOnlyAssembler',
+            'concat_with_edges': 'ConcatWithEdgesAssembler',
+        }
+        return mapping.get(mode, 'NodeDifferenceAssembler')
 
     def _verify_transform_output(self, expected_dim: int) -> None:
         """Eagerly verify edge_transform produces correct output dimension."""
