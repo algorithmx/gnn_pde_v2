@@ -1,22 +1,23 @@
 """
 GraphNet processors: DeepMind-style and edge-conditioned message passing.
 
-Two independent block families reflect distinct use cases:
+All processor blocks share a common ``GraphBlockBase`` interface:
 
 - ``MessagePassingBase`` subclasses (``GraphNetBlock``,
-  ``EdgeConditionedConvBlock``):
-    Node/edge message passing without explicit globals.
+  ``EdgeConditionedConvBlock``, ``EdgeConvBlock``, ``GENBlock``):
+    Node/edge message passing without explicit global updates.
 
-- ``GlobalGraphNetBlock`` / ``GlobalGraphNetProcessor``:
+- ``GlobalGraphNetBlock``:
     Full DeepMind Graph Nets block with globals as a first-class
     participant.
 
-``GlobalGraphNetBlock`` is intentionally not derived from
-``MessagePassingBase`` because it performs a 3-step update
-(edge → node → global) rather than the base 2-step template.
+The node/edge-only and global-aware variants still use different internal
+update templates, but now live under a unified block hierarchy so processors
+and higher-level code can reason about them consistently.
 """
 
 from abc import ABC, abstractmethod
+from functools import partial
 from typing import Callable, final, Final, Literal, Optional, Tuple, Union
 
 import torch
@@ -28,6 +29,7 @@ from ..core.functional import aggregate_edges, broadcast_global, aggregate_to_gl
 from ..core.mlp import MLP
 from ..core.aggregation import Aggregation, Sum, get_aggregation
 from ..core.protocols import EdgeMessageProcessor, EdgeFeatureAssembler
+from .edge_assemblers import NodeDifferenceAssembler
 from .edge_processors import (
     _EdgeMessageProcessorBase,
     FullEdgeMessageProcessor,
@@ -45,10 +47,16 @@ from .node_updaters import (
     _default_node_updater,
 )
 from .node_updaters import (
-    concat_mlp_factory,
-    root_weight_factory,
-    pass_through_factory,
-    residual_mlp_factory,
+    build_concat_mlp_node_updater,
+    build_root_weight_node_updater,
+    build_pass_through_node_updater,
+    build_residual_mlp_node_updater,
+)
+from .processor_validators import (
+    reset_linear_layers,
+    validate_edge_message_processor,
+    verify_edge_message_pipeline,
+    verify_edge_transform_output,
 )
 
 
@@ -58,6 +66,7 @@ from .node_updaters import (
 
 __all__ = [
     # Base classes and protocols
+    "GraphBlockBase",
     "MessagePassingBase",
     # GraphNet-style blocks
     "GraphNetBlock",
@@ -68,7 +77,36 @@ __all__ = [
     "GlobalGraphNetProcessor",
 ]
 
-class MessagePassingBase(ABC, nn.Module):
+
+# Default width for internal MLPs across processor blocks; chosen as the
+# project-wide baseline capacity for message/update networks.
+DEFAULT_HIDDEN_DIM: Final[int] = 128
+# Edge-update MLPs concatenate three latent-sized inputs
+# [sender_node, receiver_node, edge_features].
+EDGE_UPDATE_INPUT_PARTS: Final[int] = 3
+# Eager shape checks only need a minimal non-trivial edge batch; two edges are
+# enough to verify [E, ...] behavior without adding unnecessary overhead.
+PIPELINE_VALIDATION_NUM_EDGES: Final[int] = 2
+
+
+class GraphBlockBase(nn.Module, ABC):
+    """Common runtime contract for graph processor blocks.
+
+    All graph blocks consume a :class:`GraphsTuple` and return an updated
+    :class:`GraphsTuple`, regardless of whether they update edges, globals, or
+    only nodes. The class attributes expose these capabilities explicitly so
+    processors do not need fragile reflective lookups.
+    """
+
+    updates_edges: bool = False
+    updates_globals: bool = False
+
+    @abstractmethod
+    def forward(self, graph: GraphsTuple) -> GraphsTuple:
+        ...
+
+
+class MessagePassingBase(GraphBlockBase, ABC):
     """
     Abstract base class for graph message passing.
     
@@ -196,17 +234,17 @@ class GraphNetBlock(MessagePassingBase):
     def __init__(
         self,
         latent_dim: int,
-        hidden_dim: int = 128,
+        hidden_dim: int = DEFAULT_HIDDEN_DIM,
         activation: str = 'gelu',
         aggregate: Union[Aggregation, Literal['sum', 'mean', 'max', 'min']] = 'sum',
         node_updater: Optional[nn.Module] = None,
     ):
         if node_updater is None:
-            node_updater = concat_mlp_factory(
+            node_updater = build_concat_mlp_node_updater(
                 latent_dim=latent_dim,
                 hidden_dim=hidden_dim,
                 activation=activation,
-            )()
+            )
         super().__init__(
             latent_dim=latent_dim,
             aggregate=aggregate,
@@ -215,7 +253,7 @@ class GraphNetBlock(MessagePassingBase):
 
         # Edge update: [sender_node, receiver_node, edge] → new_edge
         self.edge_mlp = MLP(
-            in_dim=3 * latent_dim,
+            in_dim=EDGE_UPDATE_INPUT_PARTS * latent_dim,
             out_dim=latent_dim,
             hidden_dims=[hidden_dim, hidden_dim],
             activation=activation,
@@ -279,11 +317,11 @@ class EdgeConditionedConvBlock(MessagePassingBase):
         node_updater: Optional[nn.Module] = None,
     ):
         if node_updater is None:
-            node_updater = root_weight_factory(
+            node_updater = build_root_weight_node_updater(
                 latent_dim=latent_dim,
                 root_weight=root_weight,
                 bias=bias,
-            )()
+            )
         super().__init__(
             latent_dim=latent_dim,
             aggregate=aggregate,
@@ -295,7 +333,7 @@ class EdgeConditionedConvBlock(MessagePassingBase):
             if edge_processor is not None
             else _default_edge_message_processor(latent_dim)
         )
-        self._validate_edge_processor(
+        validate_edge_message_processor(
             edge_processor=resolved_processor,
             latent_dim=latent_dim,
         )
@@ -309,82 +347,16 @@ class EdgeConditionedConvBlock(MessagePassingBase):
                 "registration and torch.compile() support"
             )
         self.edge_weight_net = edge_weight_net
-        self._verify_edge_message_pipeline(edge_latent_dim=edge_latent_dim)
-
-    @staticmethod
-    def _validate_edge_processor(
-        edge_processor: EdgeMessageProcessor,
-        latent_dim: int,
-    ) -> int:
-        if not isinstance(edge_processor, nn.Module):
-            raise TypeError(
-                "edge_processor must be an nn.Module to preserve parameter registration "
-                "and torch.compile() specialization"
-            )
-        if not isinstance(edge_processor, EdgeMessageProcessor):
-            raise TypeError(
-                "edge_processor must satisfy EdgeMessageProcessor protocol: "
-                "provide weight_out_dim and forward(src_x, edge_weights)"
-            )
-        weight_out_dim = edge_processor.weight_out_dim
-        if not isinstance(weight_out_dim, int) or weight_out_dim <= 0:
-            raise ValueError(
-                f"edge_processor.weight_out_dim must be a positive int, got {weight_out_dim!r}"
-            )
-        processor_latent_dim = edge_processor.latent_dim
-        if processor_latent_dim != latent_dim:
-            raise ValueError(
-                "edge_processor latent_dim must match block latent_dim: "
-                f"got {processor_latent_dim} vs {latent_dim}"
-            )
-        return weight_out_dim
-
-    def _verify_edge_message_pipeline(self, edge_latent_dim: int, num_edges: int = 2) -> None:
-        """Eagerly verify the full edge-weight-net → edge-processor pipeline."""
-        if num_edges <= 0:
-            raise ValueError(f"num_edges must be positive, got {num_edges}")
-
-        tensor_kwargs = self._example_tensor_kwargs()
-        edge_features = torch.randn(num_edges, edge_latent_dim, **tensor_kwargs)
-        src_x = torch.randn(num_edges, self.latent_dim, **tensor_kwargs)
-
-        with torch.no_grad():
-            edge_weights = self.edge_weight_net(edge_features)
-            out = self.edge_processor(src_x, edge_weights)
-
-        if edge_weights.ndim != 2:
-            raise ValueError(
-                "edge_weight_net must return rank-2 tensor [E, weight_out_dim] during verification"
-            )
-        if edge_weights.shape != (num_edges, self.edge_processor.weight_out_dim):
-            raise ValueError(
-                "edge_weight_net and edge_processor disagree on weight shape during verification: "
-                f"got {tuple(edge_weights.shape)} vs ({num_edges}, {self.edge_processor.weight_out_dim})"
-            )
-        if out.ndim != 2 or out.shape != (num_edges, self.latent_dim):
-            raise ValueError(
-                "edge message pipeline must return shape [E, latent_dim] during verification: "
-                f"got {tuple(out.shape)} vs ({num_edges}, {self.latent_dim})"
-            )
-
-    def _example_tensor_kwargs(self) -> dict[str, torch.device | torch.dtype]:
-        """Infer device/dtype for eager verification tensors."""
-        ref: Optional[torch.Tensor] = next(self.edge_weight_net.parameters(), None)
-        if ref is None:
-            ref = next(self.edge_weight_net.buffers(), None)
-        if ref is None:
-            return {}
-        tensor_kwargs: dict[str, torch.device | torch.dtype] = {"device": ref.device}
-        if torch.is_floating_point(ref):
-            tensor_kwargs["dtype"] = ref.dtype
-        return tensor_kwargs
+        verify_edge_message_pipeline(
+            edge_weight_net=self.edge_weight_net,
+            edge_processor=self.edge_processor,
+            latent_dim=self.latent_dim,
+            edge_latent_dim=edge_latent_dim,
+            num_edges=PIPELINE_VALIDATION_NUM_EDGES,
+        )
 
     def reset_parameters(self):
-        for m in self.edge_weight_net.modules():
-            if isinstance(m, nn.Linear):
-                nn.init.xavier_uniform_(m.weight)
-                if m.bias is not None:
-                    nn.init.zeros_(m.bias)
+        reset_linear_layers(self.edge_weight_net)
 
     def compute_messages(
         self,
@@ -462,7 +434,7 @@ class EdgeConvBlock(MessagePassingBase):
     def __init__(
         self,
         latent_dim: int,
-        hidden_dim: int = 128,
+        hidden_dim: int = DEFAULT_HIDDEN_DIM,
         aggregate: Union[Aggregation, Literal['sum', 'mean', 'max', 'min']] = 'max',
         activation: str = 'relu',
         edge_assembler: Optional[EdgeFeatureAssembler] = None,
@@ -470,7 +442,7 @@ class EdgeConvBlock(MessagePassingBase):
         node_updater: Optional[nn.Module] = None,
     ):
         if node_updater is None:
-            node_updater = pass_through_factory(latent_dim=latent_dim)()
+            node_updater = build_pass_through_node_updater(latent_dim=latent_dim)
         
         super().__init__(
             latent_dim=latent_dim,
@@ -482,7 +454,6 @@ class EdgeConvBlock(MessagePassingBase):
         if edge_assembler is not None:
             self.edge_assembler = edge_assembler
         else:
-            from .edge_assemblers import NodeDifferenceAssembler
             self.edge_assembler = NodeDifferenceAssembler(latent_dim)
 
         # Edge transform (default: MLP)
@@ -497,30 +468,12 @@ class EdgeConvBlock(MessagePassingBase):
             )
 
         # Eager validation: ensure transform output matches latent_dim
-        self._verify_transform_output(latent_dim)
-
-    def _verify_transform_output(self, expected_dim: int) -> None:
-        """Eagerly verify edge_transform produces correct output dimension."""
-        # Create dummy tensors for verification
-        num_edges = 2
-        device = next(self.edge_transform.parameters(), torch.empty(0)).device
-        dtype = next(self.edge_transform.parameters(), torch.empty(0)).dtype
-
-        dummy_features = torch.randn(
-            num_edges, self.edge_assembler.out_dim,
-            device=device, dtype=dtype
+        verify_edge_transform_output(
+            edge_transform=self.edge_transform,
+            input_dim=self.edge_assembler.out_dim,
+            expected_dim=latent_dim,
+            num_edges=PIPELINE_VALIDATION_NUM_EDGES,
         )
-
-        with torch.no_grad():
-            output = self.edge_transform(dummy_features)
-
-        if output.shape != (num_edges, expected_dim):
-            raise ValueError(
-                f"edge_transform output shape mismatch: "
-                f"expected ({num_edges}, {expected_dim}), "
-                f"got {tuple(output.shape)}. "
-                f"Ensure out_dim={expected_dim} matches latent_dim."
-            )
 
     def compute_messages(
         self,
@@ -582,7 +535,7 @@ class GENBlock(MessagePassingBase):
     def __init__(
         self,
         latent_dim: int,
-        hidden_dim: int = 128,
+        hidden_dim: int = DEFAULT_HIDDEN_DIM,
         num_mlp_layers: int = 2,
         activation: str = 'relu',
         epsilon: float = 1e-6,
@@ -590,14 +543,14 @@ class GENBlock(MessagePassingBase):
         node_updater: Optional[nn.Module] = None,
     ):
         if node_updater is None:
-            node_updater = residual_mlp_factory(
+            node_updater = build_residual_mlp_node_updater(
                 latent_dim=latent_dim,
                 hidden_dim=hidden_dim,
                 num_layers=num_mlp_layers,
                 activation=activation,
                 message_norm=message_norm,
                 epsilon=epsilon,
-            )()
+            )
         super().__init__(
             latent_dim=latent_dim,
             aggregate='sum',  # Softmax is applied before aggregation
@@ -644,7 +597,7 @@ class GENBlock(MessagePassingBase):
 # Full Graph Nets block with globals
 # ---------------------------------------------------------------------------
 
-class GlobalGraphNetBlock(nn.Module):
+class GlobalGraphNetBlock(GraphBlockBase):
     """
     Single full Graph Nets message-passing step with globals.
 
@@ -680,11 +633,14 @@ class GlobalGraphNetBlock(nn.Module):
         out_graph = block(graph)   # graph.globals must not be None
     """
 
+    updates_edges = True
+    updates_globals = True
+
     def __init__(
         self,
         latent_dim: int,
         global_latent_dim: int,
-        hidden_dim: int = 128,
+        hidden_dim: int = DEFAULT_HIDDEN_DIM,
         activation: str = 'gelu',
         aggregate: Union[Aggregation, Literal['sum', 'mean', 'max', 'min']] = 'sum',
         global_pool: str = 'mean',
@@ -700,7 +656,7 @@ class GlobalGraphNetBlock(nn.Module):
 
         # Edge update: [sender, receiver, edge, global] → new_edge
         self.edge_mlp = MLP(
-            in_dim=3 * latent_dim + global_latent_dim,
+            in_dim=EDGE_UPDATE_INPUT_PARTS * latent_dim + global_latent_dim,
             out_dim=latent_dim,
             hidden_dims=[hidden_dim, hidden_dim],
             activation=activation,
@@ -777,7 +733,59 @@ class GlobalGraphNetBlock(nn.Module):
 # Processors (multi-layer stacks)
 # ---------------------------------------------------------------------------
 
-class GraphNetProcessor(nn.Module):
+
+class _BlockProcessorBase(nn.Module, ABC):
+    """Shared residual/checkpoint orchestration for processor stacks."""
+
+    def __init__(self, *, residual: bool, use_checkpoint: bool):
+        super().__init__()
+        self.residual = residual
+        self.use_checkpoint = use_checkpoint
+
+    @abstractmethod
+    def _make_block_step(
+        self,
+        graph: GraphsTuple,
+        block: GraphBlockBase,
+        layer_index: int,
+    ) -> Callable[..., tuple[torch.Tensor, ...]]:
+        ...
+
+    @abstractmethod
+    def _step_inputs(self, graph: GraphsTuple) -> tuple[torch.Tensor, ...]:
+        ...
+
+    @abstractmethod
+    def _replace_graph(
+        self,
+        graph: GraphsTuple,
+        step_outputs: tuple[torch.Tensor, ...],
+    ) -> GraphsTuple:
+        ...
+
+    def _apply_block(
+        self,
+        graph: GraphsTuple,
+        block: GraphBlockBase,
+        layer_index: int,
+    ) -> GraphsTuple:
+        step = self._make_block_step(graph, block, layer_index)
+        step_inputs = self._step_inputs(graph)
+
+        if self.use_checkpoint:
+            step_outputs = checkpoint(step, *step_inputs, use_reentrant=False)
+        else:
+            step_outputs = step(*step_inputs)
+
+        return self._replace_graph(graph, step_outputs)
+
+    def _run_blocks(self, graph: GraphsTuple) -> GraphsTuple:
+        for layer_index, block in enumerate(self.blocks):
+            graph = self._apply_block(graph, block, layer_index)
+        return graph
+
+
+class GraphNetProcessor(_BlockProcessorBase):
     """
     Multi-layer node/edge-only GraphNet processor.
 
@@ -815,17 +823,14 @@ class GraphNetProcessor(nn.Module):
         self,
         latent_dim: int,
         n_layers: int = 15,
-        hidden_dim: int = 128,
+        hidden_dim: int = DEFAULT_HIDDEN_DIM,
         activation: str = 'gelu',
         residual: bool = True,
         aggregate: Union[Aggregation, Literal['sum', 'mean', 'max', 'min']] = 'sum',
         use_checkpoint: bool = False,
-        block_factory: Optional[Callable[[], nn.Module]] = None,
+        block_factory: Optional[Callable[[], GraphBlockBase]] = None,
     ):
-        super().__init__()
-
-        self.residual = residual
-        self.use_checkpoint = use_checkpoint
+        super().__init__(residual=residual, use_checkpoint=use_checkpoint)
 
         if block_factory is not None:
             self.blocks = nn.ModuleList([block_factory() for _ in range(n_layers)])
@@ -849,6 +854,70 @@ class GraphNetProcessor(nn.Module):
                 nn.LayerNorm(latent_dim) for _ in range(n_layers)
             ])
 
+    @staticmethod
+    def _graph_block_step(
+        nodes: torch.Tensor,
+        edges: torch.Tensor,
+        *,
+        block: GraphBlockBase,
+        base_graph: GraphsTuple,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        block_output = block(base_graph.replace(nodes=nodes, edges=edges))
+        return block_output.nodes, block_output.edges
+
+    @staticmethod
+    def _graph_block_residual_step(
+        nodes: torch.Tensor,
+        edges: torch.Tensor,
+        *,
+        block: GraphBlockBase,
+        base_graph: GraphsTuple,
+        node_norm: nn.Module,
+        edge_norm: nn.Module,
+        updates_edges: bool,
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        normalized_edges = edge_norm(edges) if updates_edges else edges
+        normalized_graph = base_graph.replace(
+            nodes=node_norm(nodes),
+            edges=normalized_edges,
+        )
+        block_output = block(normalized_graph)
+        next_nodes = nodes + block_output.nodes
+        next_edges = edges + block_output.edges if updates_edges else edges
+        return next_nodes, next_edges
+
+    def _make_block_step(
+        self,
+        graph: GraphsTuple,
+        block: GraphBlockBase,
+        layer_index: int,
+    ) -> Callable[..., tuple[torch.Tensor, ...]]:
+        if self.residual:
+            return partial(
+                self._graph_block_residual_step,
+                block=block,
+                base_graph=graph,
+                node_norm=self.node_norms[layer_index],
+                edge_norm=self.edge_norms[layer_index],
+                updates_edges=block.updates_edges,
+            )
+        return partial(
+            self._graph_block_step,
+            block=block,
+            base_graph=graph,
+        )
+
+    def _step_inputs(self, graph: GraphsTuple) -> tuple[torch.Tensor, ...]:
+        return graph.nodes, graph.edges
+
+    def _replace_graph(
+        self,
+        graph: GraphsTuple,
+        step_outputs: tuple[torch.Tensor, ...],
+    ) -> GraphsTuple:
+        new_nodes, new_edges = step_outputs
+        return graph.replace(nodes=new_nodes, edges=new_edges)
+
     def forward(self, graph: GraphsTuple) -> GraphsTuple:
         """
         Process graph through all message-passing layers.
@@ -859,33 +928,10 @@ class GraphNetProcessor(nn.Module):
         Returns:
             Processed :class:`~gnn_pde_v2.core.GraphsTuple`.
         """
-        for i, block in enumerate(self.blocks):
-            if self.residual:
-                nn_ = self.node_norms[i]
-                en_ = self.edge_norms[i]
-                _ue = getattr(block, 'updates_edges', True)
-                def _step(nodes, edges,
-                          _b=block, _g=graph, _nn=nn_, _en=en_,
-                          _updates_edges=_ue):
-                    normed_edges = _en(edges) if _updates_edges else edges
-                    out = _b(_g.replace(nodes=_nn(nodes), edges=normed_edges))
-                    new_nodes = nodes + out.nodes
-                    new_edges = (edges + out.edges) if _updates_edges else edges
-                    return new_nodes, new_edges
-            else:
-                def _step(nodes, edges, _b=block, _g=graph):
-                    out = _b(_g.replace(nodes=nodes, edges=edges))
-                    return out.nodes, out.edges
-
-            if self.use_checkpoint:
-                new_nodes, new_edges = checkpoint(_step, graph.nodes, graph.edges, use_reentrant=False)
-            else:
-                new_nodes, new_edges = _step(graph.nodes, graph.edges)
-            graph = graph.replace(nodes=new_nodes, edges=new_edges)
-        return graph
+        return self._run_blocks(graph)
 
 
-class GlobalGraphNetProcessor(nn.Module):
+class GlobalGraphNetProcessor(_BlockProcessorBase):
     """
     Multi-layer full Graph Nets processor with globals.
 
@@ -924,16 +970,13 @@ class GlobalGraphNetProcessor(nn.Module):
         latent_dim: int,
         global_latent_dim: int,
         n_layers: int = 15,
-        hidden_dim: int = 128,
+        hidden_dim: int = DEFAULT_HIDDEN_DIM,
         activation: str = 'gelu',
         residual: bool = True,
         global_pool: str = 'mean',
         use_checkpoint: bool = False,
     ):
-        super().__init__()
-
-        self.residual = residual
-        self.use_checkpoint = use_checkpoint
+        super().__init__(residual=residual, use_checkpoint=use_checkpoint)
         self.blocks = nn.ModuleList([
             GlobalGraphNetBlock(
                 latent_dim=latent_dim,
@@ -957,6 +1000,84 @@ class GlobalGraphNetProcessor(nn.Module):
                 nn.LayerNorm(global_latent_dim) for _ in range(n_layers)
             ])
 
+    @staticmethod
+    def _global_block_step(
+        nodes: torch.Tensor,
+        edges: torch.Tensor,
+        globals_: torch.Tensor,
+        *,
+        block: GraphBlockBase,
+        base_graph: GraphsTuple,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        block_output = block(
+            base_graph.replace(nodes=nodes, edges=edges, globals=globals_)
+        )
+        return block_output.nodes, block_output.edges, block_output.globals
+
+    @staticmethod
+    def _global_block_residual_step(
+        nodes: torch.Tensor,
+        edges: torch.Tensor,
+        globals_: torch.Tensor,
+        *,
+        block: GraphBlockBase,
+        base_graph: GraphsTuple,
+        node_norm: nn.Module,
+        edge_norm: nn.Module,
+        global_norm: nn.Module,
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        normalized_graph = base_graph.replace(
+            nodes=node_norm(nodes),
+            edges=edge_norm(edges),
+            globals=global_norm(globals_),
+        )
+        block_output = block(normalized_graph)
+        return (
+            nodes + block_output.nodes,
+            edges + block_output.edges,
+            globals_ + block_output.globals,
+        )
+
+    def _make_block_step(
+        self,
+        graph: GraphsTuple,
+        block: GraphBlockBase,
+        layer_index: int,
+    ) -> Callable[..., tuple[torch.Tensor, ...]]:
+        if self.residual:
+            return partial(
+                self._global_block_residual_step,
+                block=block,
+                base_graph=graph,
+                node_norm=self.node_norms[layer_index],
+                edge_norm=self.edge_norms[layer_index],
+                global_norm=self.global_norms[layer_index],
+            )
+        return partial(
+            self._global_block_step,
+            block=block,
+            base_graph=graph,
+        )
+
+    def _step_inputs(self, graph: GraphsTuple) -> tuple[torch.Tensor, ...]:
+        assert graph.globals is not None, (
+            "GlobalGraphNetProcessor requires graph.globals to be a tensor. "
+            "If your graph has no global state, use GraphNetProcessor instead."
+        )
+        return graph.nodes, graph.edges, graph.globals
+
+    def _replace_graph(
+        self,
+        graph: GraphsTuple,
+        step_outputs: tuple[torch.Tensor, ...],
+    ) -> GraphsTuple:
+        new_nodes, new_edges, new_globals = step_outputs
+        return graph.replace(
+            nodes=new_nodes,
+            edges=new_edges,
+            globals=new_globals,
+        )
+
     def forward(self, graph: GraphsTuple) -> GraphsTuple:
         """
         Process graph through all :class:`GlobalGraphNetBlock` layers.
@@ -968,59 +1089,6 @@ class GlobalGraphNetProcessor(nn.Module):
         Returns:
             Processed :class:`~gnn_pde_v2.core.GraphsTuple`.
         """
-        for i, block in enumerate(self.blocks):
-            if self.use_checkpoint:
-                if self.residual:
-                    node_norm = self.node_norms[i]
-                    edge_norm = self.edge_norms[i]
-                    global_norm = self.global_norms[i]
-                    def _step(nodes, edges, globs,
-                              _b=block, _g=graph,
-                              _nn=node_norm, _en=edge_norm, _gn=global_norm):
-                        norm_g = _g.replace(
-                            nodes=_nn(nodes),
-                            edges=_en(edges),
-                            globals=_gn(globs),
-                        )
-                        out = _b(norm_g)
-                        return nodes + out.nodes, edges + out.edges, globs + out.globals
-                    new_nodes, new_edges, new_globals = checkpoint(
-                        _step, graph.nodes, graph.edges, graph.globals,
-                        use_reentrant=False
-                    )
-                else:
-                    def _step(nodes, edges, globs, _b=block, _g=graph):
-                        out = _b(_g.replace(nodes=nodes, edges=edges, globals=globs))
-                        return out.nodes, out.edges, out.globals
-                    new_nodes, new_edges, new_globals = checkpoint(
-                        _step, graph.nodes, graph.edges, graph.globals,
-                        use_reentrant=False
-                    )
-                graph = graph.replace(
-                    nodes=new_nodes, edges=new_edges, globals=new_globals
-                )
-            else:
-                if self.residual:
-                    # Pre-norm: normalize before block
-                    normalized_nodes = self.node_norms[i](graph.nodes)
-                    normalized_edges = self.edge_norms[i](graph.edges)
-                    normalized_globals = self.global_norms[i](graph.globals)
-                    normalized_graph = graph.replace(
-                        nodes=normalized_nodes,
-                        edges=normalized_edges,
-                        globals=normalized_globals,
-                    )
-                    # Apply block to normalized input
-                    new_graph = block(normalized_graph)
-                    # Residual: add block output to original (unnormalized) input
-                    new_graph = new_graph.replace(
-                        nodes=graph.nodes + new_graph.nodes,
-                        edges=graph.edges + new_graph.edges,
-                        globals=graph.globals + new_graph.globals,
-                    )
-                else:
-                    new_graph = block(graph)
-                graph = new_graph
-        return graph
+        return self._run_blocks(graph)
 
 

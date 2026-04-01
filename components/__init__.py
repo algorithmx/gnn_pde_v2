@@ -49,6 +49,7 @@ from .layers import (
     make_residual,
 )
 from .processors import (
+    GraphBlockBase,
     MessagePassingBase,
     GraphNetBlock, GraphNetProcessor,
     EdgeConditionedConvBlock,
@@ -74,6 +75,10 @@ from .node_updaters import (
     RootWeightNodeUpdater,
     PassThroughNodeUpdater,
     ResidualMLPNodeUpdater,
+    build_concat_mlp_node_updater,
+    build_root_weight_node_updater,
+    build_pass_through_node_updater,
+    build_residual_mlp_node_updater,
     NodeUpdaterFactory,
     concat_mlp_factory,
     root_weight_factory,
@@ -138,6 +143,10 @@ __all__ = [
     "RootWeightNodeUpdater",
     "PassThroughNodeUpdater",
     "ResidualMLPNodeUpdater",
+    "build_concat_mlp_node_updater",
+    "build_root_weight_node_updater",
+    "build_pass_through_node_updater",
+    "build_residual_mlp_node_updater",
     # Node updater factories
     "NodeUpdaterFactory",
     "concat_mlp_factory",
@@ -150,6 +159,7 @@ __all__ = [
     "GatedResidual",
     "make_residual",
     # Processors
+    "GraphBlockBase",
     "MessagePassingBase",
     "GraphNetBlock",
     "EdgeConditionedConvBlock",

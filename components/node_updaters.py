@@ -56,6 +56,11 @@ __all__ = [
     "RootWeightNodeUpdater",
     "PassThroughNodeUpdater",
     "ResidualMLPNodeUpdater",
+    # Direct builders
+    "build_concat_mlp_node_updater",
+    "build_root_weight_node_updater",
+    "build_pass_through_node_updater",
+    "build_residual_mlp_node_updater",
     # Factory functions
     "NodeUpdaterFactory",
     "concat_mlp_factory",
@@ -220,6 +225,63 @@ class ResidualMLPNodeUpdater(_NodeUpdaterBase):
 def _default_node_updater(latent_dim: int, hidden_dim: int = 128, activation: str = 'gelu') -> ConcatMLPNodeUpdater:
     """Default node updater: concatenate + MLP (Graph Nets style)."""
     return ConcatMLPNodeUpdater(latent_dim, hidden_dims=[hidden_dim, hidden_dim], activation=activation)
+
+
+def build_concat_mlp_node_updater(
+    latent_dim: int,
+    hidden_dim: int = 128,
+    activation: str = 'gelu',
+) -> ConcatMLPNodeUpdater:
+    """Construct a :class:`ConcatMLPNodeUpdater` directly.
+
+    Prefer this helper for one-off instantiation at module construction time.
+    Use :func:`concat_mlp_factory` only when a reusable zero-argument factory
+    is specifically required.
+    """
+    return concat_mlp_factory(
+        latent_dim=latent_dim,
+        hidden_dim=hidden_dim,
+        activation=activation,
+    )()
+
+
+def build_root_weight_node_updater(
+    latent_dim: int,
+    root_weight: bool = True,
+    bias: bool = True,
+) -> RootWeightNodeUpdater:
+    """Construct a :class:`RootWeightNodeUpdater` directly."""
+    return root_weight_factory(
+        latent_dim=latent_dim,
+        root_weight=root_weight,
+        bias=bias,
+    )()
+
+
+def build_pass_through_node_updater(
+    latent_dim: int,
+) -> PassThroughNodeUpdater:
+    """Construct a :class:`PassThroughNodeUpdater` directly."""
+    return pass_through_factory(latent_dim=latent_dim)()
+
+
+def build_residual_mlp_node_updater(
+    latent_dim: int,
+    hidden_dim: int = 128,
+    num_layers: int = 2,
+    activation: str = 'relu',
+    message_norm: bool = False,
+    epsilon: float = 1e-6,
+) -> ResidualMLPNodeUpdater:
+    """Construct a :class:`ResidualMLPNodeUpdater` directly."""
+    return residual_mlp_factory(
+        latent_dim=latent_dim,
+        hidden_dim=hidden_dim,
+        num_layers=num_layers,
+        activation=activation,
+        message_norm=message_norm,
+        epsilon=epsilon,
+    )()
 
 
 # =============================================================================

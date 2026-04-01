@@ -17,12 +17,6 @@ from . import attention as _attention
 __all__ = ['TransformerBlock', 'TransformerProcessor']
 
 
-# =============================================================================
-# Helper Functions
-# =============================================================================
-
-
-
 class TransformerBlock(nn.Module):
     """
     Transformer block with optional physics token attention and relative position encoding.

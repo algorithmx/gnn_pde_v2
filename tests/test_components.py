@@ -14,6 +14,7 @@ from gnn_pde_v2.core import MLP
 from functools import partial
 from gnn_pde_v2.components import (
     Residual,
+    GraphBlockBase,
     MessagePassingBase,
     GraphNetBlock, GraphNetProcessor,
     EdgeConditionedConvBlock,
@@ -24,6 +25,10 @@ from gnn_pde_v2.components import (
     EdgeConvBlock,
     GENBlock,
     GlobalGraphNetBlock, GlobalGraphNetProcessor,
+    build_concat_mlp_node_updater,
+    build_root_weight_node_updater,
+    build_pass_through_node_updater,
+    build_residual_mlp_node_updater,
     MLPDecoder, IndependentMLPDecoder,
     ProbeDecoder, WindFarmGNO, ProbeGraphBuilder,
     LearnableRBFEncoder,
@@ -378,6 +383,13 @@ class TestGraphNetBlock:
 class TestMessagePassingBlock:
     """Test MessagePassingBase ABC contract."""
 
+    def test_blocks_share_common_graph_block_base(self):
+        """All processor blocks should expose a common graph-block interface."""
+        assert issubclass(MessagePassingBase, GraphBlockBase)
+        assert issubclass(GraphNetBlock, GraphBlockBase)
+        assert issubclass(EdgeConditionedConvBlock, GraphBlockBase)
+        assert issubclass(GlobalGraphNetBlock, GraphBlockBase)
+
     def test_graphnetblock_is_subclass(self):
         """GraphNetBlock must be a MessagePassingBase subclass."""
         assert issubclass(GraphNetBlock, MessagePassingBase)
@@ -390,6 +402,8 @@ class TestMessagePassingBlock:
         """Check updates_edges class attribute."""
         assert GraphNetBlock.updates_edges is True
         assert EdgeConditionedConvBlock.updates_edges is False
+        assert GlobalGraphNetBlock.updates_edges is True
+        assert GlobalGraphNetBlock.updates_globals is True
 
     def test_cannot_instantiate_abc(self):
         """MessagePassingBase is abstract and cannot be instantiated directly."""
@@ -1114,6 +1128,35 @@ class TestGlobalGraphNetBlock:
 
         with pytest.raises(AssertionError, match="GlobalGraphNetBlock requires"):
             block(graph)
+
+
+class TestNodeUpdaterBuilders:
+    """Direct builder helpers should instantiate the expected updater modules."""
+
+    def test_build_concat_mlp_node_updater(self):
+        updater = build_concat_mlp_node_updater(latent_dim=8, hidden_dim=16)
+        assert updater.__class__.__name__ == "ConcatMLPNodeUpdater"
+        assert updater.latent_dim == 8
+
+    def test_build_root_weight_node_updater(self):
+        updater = build_root_weight_node_updater(latent_dim=8, root_weight=True, bias=False)
+        assert updater.__class__.__name__ == "RootWeightNodeUpdater"
+        assert updater.bias is None
+
+    def test_build_pass_through_node_updater(self):
+        updater = build_pass_through_node_updater(latent_dim=8)
+        assert updater.__class__.__name__ == "PassThroughNodeUpdater"
+        assert updater.latent_dim == 8
+
+    def test_build_residual_mlp_node_updater(self):
+        updater = build_residual_mlp_node_updater(
+            latent_dim=8,
+            hidden_dim=16,
+            num_layers=3,
+            message_norm=True,
+        )
+        assert updater.__class__.__name__ == "ResidualMLPNodeUpdater"
+        assert updater.message_norm is True
 
 
 class TestGraphNetProcessor:
