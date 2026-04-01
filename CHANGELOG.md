@@ -5,6 +5,35 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.1] - 2026-04-01
+
+### GraphBlockBase Interface and Processor Validation
+
+**New `GraphBlockBase` ABC** (`components/processors.py`):
+- Common runtime contract for all graph processor blocks (`forward(graph) -> graph`)
+- Class attributes `updates_edges` / `updates_globals` declare block capabilities
+- `MessagePassingBase` now inherits from `GraphBlockBase`
+- `GlobalGraphNetBlock` sits alongside `MessagePassingBase` under the same hierarchy
+
+**New `processor_validators.py` module** (`components/processor_validators.py`):
+- `validate_edge_message_processor()` — type and dimension checks for edge processors
+- `verify_edge_message_pipeline()` — eager shape validation of the full edge→node pipeline
+- `verify_edge_transform_output()` — validates edge transform output dimensions
+- `reset_linear_layers()` — reinitializes `nn.Linear` parameters in a module
+- `infer_module_tensor_kwargs()` — infers device/dtype from an existing module
+
+**New direct builder functions** (`components/node_updaters.py`):
+- `build_concat_mlp_node_updater()`, `build_root_weight_node_updater()`
+- `build_pass_through_node_updater()`, `build_residual_mlp_node_updater()`
+- Prefer these over factory functions (`concat_mlp_factory` etc.) for one-off construction
+
+**Refactored processors** (`components/processors.py`):
+- All blocks use direct builders instead of factory functions for node updaters
+- Validation extracted into `processor_validators` helpers
+- Module-level constants: `DEFAULT_HIDDEN_DIM`, `EDGE_UPDATE_INPUT_PARTS`, `PIPELINE_VALIDATION_NUM_EDGES`
+
+**New Tests** (`tests/test_components.py`):
+- Tests for builder functions and `GraphBlockBase` interface compliance
 
 ## [2.9.0] - 2026-03-19
 
