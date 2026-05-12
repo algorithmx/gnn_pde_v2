@@ -6,7 +6,7 @@ position encoding for spatial awareness in PDE applications.
 """
 
 import math
-from typing import Optional
+from typing import Optional, Tuple
 
 import torch
 import torch.nn as nn
@@ -889,31 +889,29 @@ class PhysicsTokenAttention(nn.Module):
             anneal_final_temp=anneal_final_temp,
         )
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def _compute_slice_tokens(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         """
+        Compute slice tokens and weights from input tensor.
+        
         Args:
-            x: [N, D] or [B, N, D] - Input features
+            x: Input tensor [B, N, D] or [N, D]
             
         Returns:
-            [N, D] or [B, N, D] - Processed features
+            Tuple of (tokens [B, H, G, d], slice_weights [B, H, N, G])
         """
-        single_batch = False
+        # Handle single-batch case
         if x.dim() == 2:
             x = x.unsqueeze(0)
-            single_batch = True
         
         B, N, D = x.shape
         H = self.n_heads
         G = self.n_tokens
         d = self.head_dim
         
-        # --- Slice: Project N points to G tokens ---
-        
+        # Input projection
         if self.qkv_mode == 'direct':
             # Paper-faithful two-branch projection
-            # Branch 1: for slice weights (x)
             x_mid = self.in_project_x(x).reshape(B, N, H, d).permute(0, 2, 1, 3)  # [B, H, N, d]
-            # Branch 2: for slice content (fx)
             fx_mid = self.in_project_fx(x).reshape(B, N, H, d).permute(0, 2, 1, 3)  # [B, H, N, d]
         else:
             # Framework style: single projection for content
@@ -943,6 +941,29 @@ class PhysicsTokenAttention(nn.Module):
         if self.use_slice_normalization:
             slice_norm = slice_weights.sum(dim=2, keepdim=True)  # [B, H, 1, G]
             tokens = tokens / (slice_norm.transpose(-2, -1) + 1e-5)  # [B, H, G, d]
+        
+        return tokens, slice_weights
+    
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Args:
+            x: [N, D] or [B, N, D] - Input features
+            
+        Returns:
+            [N, D] or [B, N, D] - Processed features
+        """
+        single_batch = False
+        if x.dim() == 2:
+            x = x.unsqueeze(0)
+            single_batch = True
+        
+        B, N, D = x.shape
+        H = self.n_heads
+        G = self.n_tokens
+        d = self.head_dim
+        
+        # --- Slice: Project N points to G tokens ---
+        tokens, slice_weights = self._compute_slice_tokens(x)
         
         # --- Attention: Process G tokens ---
         
@@ -1250,6 +1271,45 @@ class PhysicsTokenAttentionV3(PhysicsTokenAttention):
         else:
             self.tiled_slice = None
     
+    def _compute_slice_tokens(self, x: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
+        """
+        Override to support tiling for large meshes.
+        
+        Falls back to parent implementation when tiling is disabled or N is small.
+        """
+        B, N, D = x.shape
+        H = self.n_heads
+        G = self.n_tokens
+        d = self.head_dim
+        
+        # Input projection (needed for tiling and recompute paths)
+        if self.qkv_mode == 'direct':
+            x_mid = self.in_project_x(x).reshape(B, N, H, d).permute(0, 2, 1, 3)
+            fx_mid = self.in_project_fx(x).reshape(B, N, H, d).permute(0, 2, 1, 3)
+        else:
+            x_mid = x.reshape(B, N, H, d).permute(0, 2, 1, 3)
+            fx_mid = self.slice_content_proj(x).reshape(B, N, H, d).permute(0, 2, 1, 3)
+        
+        if self.use_tiling and self.tiled_slice is not None and N > self.tiled_slice.tile_size:
+            tokens, slice_weights = self.tiled_slice(
+                fx_mid, x_mid, self.slice_weight_proj,
+                self.temperature_module, self.use_gumbel_softmax,
+                self.training, self.use_slice_normalization,
+            )
+            # Normalization already applied in tiled slice if enabled
+            if not self.use_slice_normalization:
+                # NOTE: Preserved existing V3 behavior — recompute for non-normalized tiling path
+                slice_logits = self.slice_weight_proj(x_mid)
+                if self.use_gumbel_softmax and self.training:
+                    epsilon = torch.rand_like(slice_logits)
+                    gumbel_noise = -torch.log(-torch.log(epsilon + 1e-10) + 1e-10)
+                    slice_logits = slice_logits - gumbel_noise
+                _, slice_logits = self.temperature_module(slice_logits, x)
+                slice_weights = torch.softmax(slice_logits, dim=-1)
+            return tokens, slice_weights
+        else:
+            return super()._compute_slice_tokens(x)
+    
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Forward pass with Transolver-3 optimizations.
@@ -1271,49 +1331,7 @@ class PhysicsTokenAttentionV3(PhysicsTokenAttention):
         d = self.head_dim
         
         # --- Slice: Project N points to G tokens ---
-        
-        if self.qkv_mode == 'direct':
-            # Two-branch projection (paper-faithful)
-            x_mid = self.in_project_x(x).reshape(B, N, H, d).permute(0, 2, 1, 3)
-            fx_mid = self.in_project_fx(x).reshape(B, N, H, d).permute(0, 2, 1, 3)
-        else:
-            x_mid = x.reshape(B, N, H, d).permute(0, 2, 1, 3)
-            fx_mid = self.slice_content_proj(x).reshape(B, N, H, d).permute(0, 2, 1, 3)
-        
-        # Apply tiling or standard slice
-        if self.use_tiling and self.tiled_slice is not None and N > self.tiled_slice.tile_size:
-            tokens, slice_weights = self.tiled_slice(
-                fx_mid, x_mid, self.slice_weight_proj,
-                self.temperature_module, self.use_gumbel_softmax,
-                self.training, self.use_slice_normalization,
-            )
-            # Normalization already applied in tiled slice if enabled
-            if not self.use_slice_normalization:
-                # Need to recompute slice weights for deslice
-                slice_logits = self.slice_weight_proj(x_mid)
-                if self.use_gumbel_softmax and self.training:
-                    epsilon = torch.rand_like(slice_logits)
-                    gumbel_noise = -torch.log(-torch.log(epsilon + 1e-10) + 1e-10)
-                    slice_logits = slice_logits - gumbel_noise
-                _, slice_logits = self.temperature_module(slice_logits, x)
-                slice_weights = torch.softmax(slice_logits, dim=-1)
-        else:
-            # Standard slice (from parent class logic)
-            slice_logits = self.slice_weight_proj(x_mid)
-            
-            if self.use_gumbel_softmax and self.training:
-                epsilon = torch.rand_like(slice_logits)
-                gumbel_noise = -torch.log(-torch.log(epsilon + 1e-10) + 1e-10)
-                slice_logits = slice_logits - gumbel_noise
-            
-            temperature, slice_logits = self.temperature_module(slice_logits, x)
-            slice_weights = torch.softmax(slice_logits, dim=-1)
-            
-            tokens = torch.einsum('bhnd,bhng->bhgd', fx_mid, slice_weights)
-            
-            if self.use_slice_normalization:
-                slice_norm = slice_weights.sum(dim=2, keepdim=True)
-                tokens = tokens / (slice_norm.transpose(-2, -1) + 1e-5)
+        tokens, slice_weights = self._compute_slice_tokens(x)
         
         # --- Attention: Process G tokens ---
         
