@@ -78,6 +78,7 @@ class AdaptiveTemperature(TemperatureBase):
     def __init__(self, feature_dim: int, init_temperature: float = 1.0, 
                  min_temp: float = 0.1, learnable_base: bool = True):
         super().__init__()
+        self.learnable_base = learnable_base
         if learnable_base:
             self.log_tau_0 = nn.Parameter(torch.log(torch.tensor(init_temperature)))
         else:
@@ -91,7 +92,7 @@ class AdaptiveTemperature(TemperatureBase):
     def forward(self, logits: torch.Tensor, features: torch.Tensor) -> Tuple[torch.Tensor, torch.Tensor]:
         # features: [B, N, D]
         # logits: [B, H, N, G]
-        tau_0 = torch.exp(self.log_tau_0) if hasattr(self, 'log_tau_0') else self.tau_0
+        tau_0 = torch.exp(self.log_tau_0) if self.learnable_base else self.tau_0
         delta_tau = self.temp_proj(features).squeeze(-1)  # [B, N]
         temperatures = (tau_0 + delta_tau).clamp_min(self.min_temp)  # [B, N]
         temperatures = temperatures.unsqueeze(1).unsqueeze(-1)  # [B, 1, N, 1]
