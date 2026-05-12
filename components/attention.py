@@ -635,6 +635,14 @@ class SparseGraphAttention(nn.Module):
             f"dim {dim} must be divisible by n_heads {n_heads}"
         )
 
+        if temperature_mode == 'adaptive':
+            raise ValueError(
+                "SparseGraphAttention does not support 'adaptive' temperature mode "
+                "because per-node temperature features are incompatible with "
+                "per-edge attention scores. Use 'fixed', 'learnable_scalar', "
+                "'per_head', or 'annealed' instead."
+            )
+
         self.dim = dim
         self.n_heads = n_heads
         self.head_dim = dim // n_heads
@@ -725,9 +733,10 @@ class SparseGraphAttention(nn.Module):
 
         # Apply temperature using canonical temperature module
         # Temperature module expects [B, H, N, G], we have [E, H]
-        attn_scores_4d = attn_scores.unsqueeze(0).unsqueeze(0)  # [1, 1, E, H]
+        # Reshape: [E, H] → [1, H, E, 1] (batch=1, heads=H, items=E edges, group=1)
+        attn_scores_4d = attn_scores.T.unsqueeze(0).unsqueeze(-1)  # [1, H, E, 1]
         _, attn_scores_4d = self.temperature_module(attn_scores_4d, x.unsqueeze(0))
-        attn_scores = attn_scores_4d.squeeze(0).squeeze(0)  # [E, H]
+        attn_scores = attn_scores_4d.squeeze(0).squeeze(-1).T  # [H, E] → [E, H]
 
         # Sparse softmax: normalise over all edges arriving at the same receiver
         # scatter_softmax groups by receivers along dim=0 (the edge dimension)
