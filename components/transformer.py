@@ -9,12 +9,25 @@ from typing import Optional
 import torch
 import torch.nn as nn
 from torch.utils.checkpoint import checkpoint
+import warnings
 
 from ..core.mlp import MLP
 from ..core.graph import GraphsTuple
 from . import attention as _attention
 
 __all__ = ['TransformerBlock', 'TransformerProcessor']
+
+_PHYSICS_TOKEN_PARAMS = frozenset({
+    'n_tokens', 'temperature', 'temperature_mode', 'use_gumbel_softmax',
+    'min_temperature', 'anneal_warmup_epochs', 'anneal_factor',
+    'anneal_final_temp', 'use_slice_normalization', 'use_learnable_tokens',
+    'qkv_mode', 'use_orthogonal_init',
+})
+_POSITION_PARAMS = frozenset({
+    'position_dim', 'max_distance', 'num_position_buckets',
+    'position_encoding_type',
+})
+_warned_blocks = set()
 
 
 class TransformerBlock(nn.Module):
@@ -53,7 +66,52 @@ class TransformerBlock(nn.Module):
         use_orthogonal_init: bool = True,
     ):
         super().__init__()
-        
+
+        # Parameter validation warnings
+        _defaults = {
+            'dim': None,
+            'n_heads': 8,
+            'mlp_ratio': 4.0,
+            'dropout': 0.0,
+            'use_physics_tokens': False,
+            'n_tokens': 32,
+            'use_relative_positions': False,
+            'position_dim': 2,
+            'max_distance': 10.0,
+            'num_position_buckets': 32,
+            'position_encoding_type': 'learned',
+            'temperature': 0.5,
+            'temperature_mode': 'learnable_scalar',
+            'use_gumbel_softmax': False,
+            'min_temperature': 0.1,
+            'anneal_warmup_epochs': 5,
+            'anneal_factor': 0.98,
+            'anneal_final_temp': 0.05,
+            'use_slice_normalization': True,
+            'use_learnable_tokens': False,
+            'qkv_mode': 'direct',
+            'use_orthogonal_init': True,
+        }
+        _vals = locals()
+        _ignored = []
+        if use_physics_tokens:
+            for _p in _POSITION_PARAMS:
+                if _vals[_p] != _defaults[_p]:
+                    _ignored.append(_p)
+        else:
+            for _p in _PHYSICS_TOKEN_PARAMS:
+                if _vals[_p] != _defaults[_p]:
+                    _ignored.append(_p)
+        if _ignored:
+            _key = (use_physics_tokens, tuple(sorted(_ignored)))
+            if _key not in _warned_blocks:
+                _warned_blocks.add(_key)
+                warnings.warn(
+                    f"Ignored parameters when use_physics_tokens={use_physics_tokens}: {sorted(_ignored)}",
+                    UserWarning,
+                    stacklevel=2,
+                )
+
         self.norm1 = nn.LayerNorm(dim)
         self.use_physics_tokens = use_physics_tokens
         self.use_relative_positions = use_relative_positions

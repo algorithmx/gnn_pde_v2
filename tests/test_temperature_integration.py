@@ -168,13 +168,14 @@ class TestTransformerBlockTemperature:
         block.set_epoch(5)
     
     def test_transformer_block_without_physics_tokens(self):
-        """Test TransformerBlock without physics tokens ignores temperature params."""
-        block = TransformerBlock(
-            dim=64,
-            n_heads=4,
-            use_physics_tokens=False,
-            temperature_mode='adaptive'  # Should be ignored
-        )
+        """Test TransformerBlock without physics tokens warns about ignored params."""
+        with pytest.warns(UserWarning, match="Ignored parameters"):
+            block = TransformerBlock(
+                dim=64,
+                n_heads=4,
+                use_physics_tokens=False,
+                temperature_mode='adaptive'  # Should be ignored
+            )
         
         x = torch.randn(2, 16, 64)
         out = block(x)
