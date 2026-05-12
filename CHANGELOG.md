@@ -5,6 +5,33 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.2] - 2026-05-12
+
+### Transformer, Attention & Temperature Quality Fixes
+
+Six targeted fixes addressing code quality issues, bugs, and design gaps in
+the transformer/attention/temperature modules.
+
+**Fixed** (`components/attention.py`):
+- Removed unused `TOKEN_SLICE = "token_slice"` dead constant from `QKVProjectionType` enum (Issue #3)
+- Fixed `SparseGraphAttention` temperature reshape: `[E, H] → [1, H, E, 1]` for correct per-edge per-head broadcasting; added `ValueError` for unsupported `adaptive` mode (Issue #6)
+
+**Fixed** (`components/temperature.py`):
+- Replaced fragile `hasattr(self, 'log_tau_0')` check in `AdaptiveTemperature.forward()` with `self.learnable_base` flag stored at init time (Issue #8)
+- Added `epoch: Optional[int]` parameter to `ScheduledTemperature.forward()` for read-only epoch injection without mutating training state; extracted `_compute_temperature(epoch)` method (Issue #9)
+- Restructured temperature hierarchy: created `ScheduledTemperature` base class merging `FixedTemperature` and `AnnealedTemperature`
+
+**Added** (`components/transformer.py`):
+- Parameter validation warnings in `TransformerBlock.__init__()`: warns on unrecognized physics-token and position kwargs that would be silently ignored (Issue #4)
+
+**Changed** (`components/attention.py`):
+- Extracted `_compute_slice_tokens(self, x)` method from `PhysicsTokenAttention.forward()`; `PhysicsTokenAttentionV3` overrides it with tiling delegation, eliminating duplicated slice logic (Issue #5)
+
+**Tests**:
+- New `tests/test_sparse_graph_attention.py` — 21 tests covering reshape fix, temperature modes, edge cases
+- Updated `tests/test_temperature_integration.py` with `pytest.warns(UserWarning)` for validation warnings
+- Total: 423 tests pass (2 pre-existing failures unrelated)
+
 ## [2.9.1] - 2026-04-01
 
 ### GraphBlockBase Interface and Processor Validation
