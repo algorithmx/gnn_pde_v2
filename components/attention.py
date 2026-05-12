@@ -25,7 +25,6 @@ class QKVProjectionType:
     """Enum-like options for QKV projection strategies."""
     COMBINED = "combined"      # Single linear: dim -> 3*dim
     SEPARATE = "separate"       # Three linears: dim -> dim each
-    TOKEN_SLICE = "token_slice"  # Custom for token-based attention
 
 
 def create_qkv_projection(
