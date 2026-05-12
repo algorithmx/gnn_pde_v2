@@ -51,7 +51,6 @@ graph TB
         EX_TRANS[examples.example_transolver, example_transolver_v3]
         EX_UNI[examples.example_unisolver]
         EX_WIND[examples.example_windfarm_gno]
-        EX_DEEP[examples.example_deepxde]
         TRAINING[examples.training_utils]
     end
 

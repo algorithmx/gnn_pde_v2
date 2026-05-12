@@ -18,70 +18,6 @@ A clean implementation of the Encode-Process-Decode architecture for PDE-GNNs wi
 - **Auto-Registration**: Models can self-register for config-based instantiation
 - **Flexible Dependencies**: Graceful fallbacks when optional dependencies unavailable
 
-### Architecture Philosophy
-
-The framework provides two usage patterns:
-
-1. **Lean Core API** (recommended for research): Direct component usage
-2. **Model Registry** (optional): Auto-registration for config-driven workflows
-
-## Architecture
-
-```
-gnn_pde_v2/
-├── core/                    # Minimal core primitives
-│   ├── base.py              # BaseModel marker class
-│   ├── graph.py             # GraphsTuple, batch_graphs, unbatch_graphs
-│   ├── mlp.py               # MLP, SinActivation
-│   ├── functional.py        # Scatter operations (torch_scatter fallback)
-│   ├── aggregation.py       # Aggregation protocol (Sum, Mean, Max, Min)
-│   ├── registry.py          # AutoRegisterModel, MODEL_REGISTRY
-│   └── protocols.py        # Structural protocols (GraphProcessor, etc.)
-├── components/              # Reusable building blocks
-│   ├── layers.py            # Residual, GatedResidual, make_residual
-│   ├── encoders.py          # (legacy, use models.gnn_model.MeshEncoder)
-│   ├── processors.py        # GraphNetBlock, MessagePassingBase, GENBlock
-│   ├── gcn.py               # GCNBlock, GCNBlockWithEdgeFeatures
-│   ├── transformer.py       # TransformerBlock, TransformerProcessor
-│   ├── attention.py         # MultiHeadAttention, PhysicsTokenAttention, etc.
-│   ├── conditioning.py      # AdaLN, DualAdaLN, FiLM, ZeroConditioning
-│   ├── temperature.py       # Temperature mechanisms
-│   ├── spectral.py         # SpectralConv, FNOBlock, AFNOBlock, FNOProcessor
-│   ├── decoders.py         # MLPDecoder, IndependentMLPDecoder
-│   ├── probe.py             # ProbeDecoder, WindFarmGNO, ProbeGraphBuilder
-│   ├── rbf.py              # LearnableRBFEncoder, GaussianRBFEncoder
-│   └── fourier_encoder.py  # FourierFeatureEncoder
-├── models/                  # Complete model implementations
-│   ├── encode_process_decode.py  # Clean EPD model
-│   ├── gnn_model.py             # GraphNet, MeshGraphNet, MeshEncoder
-│   ├── fno_model.py             # FNO, TFNO, AFNO (lazy loaded)
-│   └── multiscale_fno.py        # MultiscaleFNO (lazy loaded)
-├── examples/                 # Research paper reproductions
-│   ├── example_meshgraphnets.py     # MeshGraphNets (ICML 2021)
-│   ├── example_deepxde.py           # DeepXDE (SIAM Review 2021)
-│   ├── example_neuraloperator_fno.py # NeuralOperator FNO (ICLR 2021)
-│   ├── example_transolver.py         # Transolver (ICML 2024)
-│   ├── example_transolver_v3.py      # Transolver-3 - 160M+ cell (2026)
-│   ├── example_unisolver.py          # Unisolver (ICML 2024)
-│   ├── example_windfarm_gno.py       # WindFarm GNO (2025)
-│   ├── example_graph_pde_gno.py      # Graph-PDE GNO (2020)
-│   ├── example_mgkn.py               # MGKN (Mesh Graph Networks)
-│   ├── example_low_width_graph_transformer.py  # Low-width transformer
-│   ├── example_qk_norm.py            # QK-Norm attention
-│   ├── example_relative_position_attention.py   # Relative position
-│   ├── example_graph_unets.py        # Graph U-Nets
-│   ├── example_graph_unets_framework.py  # Graph U-Nets framework
-│   ├── example_ufno.py               # UFNO (U-shaped FNO)
-│   └── training_utils.py             # Training utilities
-├── utils/                   # Utility functions
-│   ├── graph_utils.py      # knn_graph, radius_graph, compute_edge_features
-│   └── spatial_utils.py    # grid_to_points, points_to_grid
-└── tests/                   # Comprehensive test suite
-    ├── test_core.py
-    ├── test_components.py
-    └── test_examples.py
-```
-
 ## Quick Start
 
 ### Lean Core API (Recommended)
@@ -341,7 +277,6 @@ The framework includes exact reproductions of 10+ major PDE-GNN papers:
 | Paper | Model | Key Innovation |
 |-------|-------|----------------|
 | MeshGraphNets (ICML 2021) | `meshgraphnet` | Unstructured mesh simulation |
-| DeepXDE (SIAM 2021) | `deepxde` | Physics-informed neural networks |
 | NeuralOperator FNO (ICLR 2021) | `fno` | Fourier neural operators |
 | Transolver (ICML 2024) | `transolver` | Physics-attention mechanism |
 | Transolver-3 (2026) | `transolver_v3` | 160M+ cell industrial scale |

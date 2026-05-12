@@ -28,7 +28,7 @@ class TestCoreExamples:
 
 class TestConvenientExamples:
     """Test convenient (high-level) examples."""
-    
+
     def test_meshgraphnets_easy_imports(self):
         """Test that meshgraphnets_easy.py can be imported."""
         try:
@@ -40,7 +40,7 @@ class TestConvenientExamples:
 
 class TestPaperExamples:
     """Test paper replication examples."""
-    
+
     def test_meshgraphnets_imports(self):
         """Test MeshGraphNets example imports."""
         try:
@@ -48,16 +48,7 @@ class TestPaperExamples:
             assert hasattr(example, 'MeshGraphNets')
         except ImportError as e:
             pytest.fail(f"Failed to import MeshGraphNets example: {e}")
-    
-    def test_deepxde_imports(self):
-        """Test DeepXDE example imports."""
-        try:
-            from gnn_pde_v2.examples import example_deepxde as example
-            assert hasattr(example, 'Model')
-            assert hasattr(example, 'DeepONet')
-        except ImportError as e:
-            pytest.fail(f"Failed to import DeepXDE example: {e}")
-    
+
     def test_fno_imports(self):
         """Test FNO example imports."""
         try:
@@ -65,7 +56,7 @@ class TestPaperExamples:
             assert hasattr(example, 'FNO')
         except ImportError as e:
             pytest.fail(f"Failed to import FNO example: {e}")
-    
+
     def test_transolver_imports(self):
         """Test Transolver example imports."""
         try:
@@ -73,7 +64,7 @@ class TestPaperExamples:
             assert hasattr(example, 'Transolver')
         except ImportError as e:
             pytest.fail(f"Failed to import Transolver example: {e}")
-    
+
     def test_unisolver_imports(self):
         """Test Unisolver example imports."""
         try:
@@ -81,7 +72,7 @@ class TestPaperExamples:
             assert hasattr(example, 'UniSolver')
         except ImportError as e:
             pytest.fail(f"Failed to import UniSolver example: {e}")
-    
+
     def test_windfarm_imports(self):
         """Test WindFarm GNO example imports."""
         try:
@@ -89,7 +80,7 @@ class TestPaperExamples:
             assert hasattr(example, 'WindFarmGNO')
         except ImportError as e:
             pytest.fail(f"Failed to import WindFarm example: {e}")
-    
+
     def test_graph_pde_imports(self):
         """Test Graph-PDE GNO example imports."""
         try:

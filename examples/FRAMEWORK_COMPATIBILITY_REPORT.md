@@ -11,8 +11,6 @@ This report analyzes all example scripts in the `examples/` folder against the `
 
 | Example | Framework Integration | Custom Code Level | Recommendations |
 |---------|----------------------|-------------------|-----------------|
-| `example_deepxde.py` | **High** | Minimal | Excellent reference implementation |
-| `example_deepxde_style.py` | **High** | Minimal | Uses framework MLP, FourierFeatureEncoder |
 | `example_meshgraphnets.py` | **High** | Low | Paper-specific MLP config required |
 | `example_graph_pde_gno.py` | **High** | Minimal | Uses framework EdgeConditionedConvBlock |
 | `example_transolver.py` | **High** | Minimal | Uses PhysicsTokenAttention with paper defaults |
@@ -31,31 +29,6 @@ This report analyzes all example scripts in the `examples/` folder against the `
 ---
 
 ## Detailed Analysis by Example
-
-### 1. `example_deepxde.py` and `example_deepxde_style.py`
-
-**Purpose:** DeepXDE-style Physics-Informed Neural Networks (PINNs)
-
-**Framework Components Used:**
-- `gnn_pde_v2.core.MLP` - Neural network backbone
-- `gnn_pde_v2.core.AutoRegisterModel` - Model registration
-- `gnn_pde_v2.components.FourierFeatureEncoder` - High-frequency feature encoding
-
-**Custom Code:**
-- `PhysicsLoss` class - PDE-specific loss computation with autograd
-- `Data` abstract class hierarchy - DeepXDE API abstraction
-- `get_initializer()` - DeepXDE-style weight initialization mapping
-
-**Assessment:** ✅ **Excellent Integration**
-- Demonstrates framework's MLP is flexible enough for PINN applications
-- FourierFeatureEncoder properly handles high-frequency PDE challenges
-- Minimal duplication - custom code is genuinely application-specific
-
-**Recommendations:**
-- Consider contributing `PhysicsLoss` to framework utilities if reused across examples
-- The `get_initializer()` helper could be added to `core.mlp.py`
-
----
 
 ### 2. `example_meshgraphnets.py`
 

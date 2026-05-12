@@ -7,7 +7,6 @@ This directory contains reference implementations of popular PDE-GNN architectur
 | Example | Paper | Key Innovation | Use Case |
 |---------|-------|----------------|----------|
 | [MeshGraphNets](#meshgraphnets) | Pfaff et al., ICML 2021 | Graph networks on unstructured meshes | CFD, cloth simulation |
-| [DeepXDE](#deepxde) | Lu et al., SIAM Review 2021 | Physics-informed neural networks | PDE solving with constraints |
 | [NeuralOperator FNO](#neuraloperator-fno) | Li et al., ICLR 2021 | Fourier neural operators | Function space learning |
 | [Transolver](#transolver) | Wu et al., ICML 2024 | Physics-attention mechanism | Irregular geometries |
 | [Unisolver](#unisolver) | Zhou et al., ICML 2024 | PDE-conditional transformers | Universal PDE solver |
