@@ -315,7 +315,7 @@ class GridModel(Protocol):
     """Protocol for end-to-end grid-to-grid models.
 
     Satisfied by :class:`~gnn_pde_v2.models.FNO`,
-    :class:`~gnn_pde_v2.models.TFNO`, :class:`~gnn_pde_v2.models.FNOPlus`,
+    :class:`~gnn_pde_v2.models.TFNO`, :class:`~gnn_pde_v2.models.AFNO`,
     and any ``Tensor → Tensor`` model.
     """
 

@@ -14,19 +14,23 @@ graph TB
 
     subgraph "Core Layer"
         BASE[core.base<br/>BaseModel]
-        GRAPH[core.graph<br/>GraphsTuple]
+        GRAPH[core.graph<br/>GraphsTuple, GraphTopology]
         MLP[core.mlp<br/>MLP, SinActivation]
         FUNC[core.functional<br/>scatter_*, aggregate_*]
         AGG[core.aggregation<br/>Aggregation, Sum, Mean, Max, Min]
         REG[core.registry<br/>AutoRegisterModel, MODEL_REGISTRY]
-        PROT[core.protocols<br/>ConditioningProtocol, GraphProcessor, etc.]
+        PROT[core.protocols<br/>ConditioningProtocol, GraphProcessor,<br/>NodeUpdateStrategy, EdgeMessageProcessor, etc.]
     end
 
     subgraph "Components Layer"
         PROC[components.processors<br/>GraphNetBlock, MessagePassingBase, GENBlock]
+        EDGEPROC[components.edge_processors<br/>FullEdgeMessageProcessor,<br/>LowRankEdgeMessageProcessor, ...]
+        EDGEASM[components.edge_assemblers<br/>NodeDifferenceAssembler,<br/>ConcatAssembler, ...]
+        NODEUP[components.node_updaters<br/>ConcatMLPNodeUpdater,<br/>RootWeightNodeUpdater, ...]
+        VAL[components.processor_validators<br/>verify_edge_message_pipeline, ...]
         GCN[components.gcn<br/>GCNBlock, GCNBlockWithEdgeFeatures]
         TRANS[components.transformer<br/>TransformerBlock, TransformerProcessor]
-        ATTN[components.attention<br/>MultiHeadAttention, PhysicsTokenAttention, QKNorm, SparseGraphAttention]
+        ATTN[components.attention<br/>MultiHeadAttention, PhysicsTokenAttention,<br/>QKNorm, SparseGraphAttention]
         COND[components.conditioning<br/>AdaLN, DualAdaLN, FiLM, ZeroConditioning]
         TEMP[components.temperature<br/>TemperatureBase, AdaptiveTemperature, AnnealedTemperature]
         SPECT[components.spectral<br/>SpectralConv, FNOBlock, AFNOBlock, FNOProcessor]
@@ -35,6 +39,7 @@ graph TB
         RBF[components.rbf<br/>LearnableRBFEncoder, GaussianRBFEncoder]
         FOURIER[components.fourier_encoder<br/>FourierFeatureEncoder]
         LAYERS[components.layers<br/>Residual, GatedResidual, make_residual]
+        MULTI[components.multiscale<br/>GraphUNetProcessor, MGKNProcessor,<br/>UFNOBlock, MultiResolutionFNOBlock, ...]
     end
 
     subgraph "Models Layer"
@@ -48,10 +53,19 @@ graph TB
         EX_MESH[examples.example_meshgraphnets]
         EX_GNN[examples.example_graph_pde_gno]
         EX_FNO[examples.example_neuraloperator_fno]
-        EX_TRANS[examples.example_transolver, example_transolver_v3]
+        EX_TRANS[examples.example_transolver]
+        EX_TRANS3[examples.example_transolver_v3]
+        EX_GEO[examples.example_geotransolver]
         EX_UNI[examples.example_unisolver]
         EX_WIND[examples.example_windfarm_gno]
-        TRAINING[examples.training_utils]
+        EX_MGKN[examples.example_mgkn]
+        EX_UFNO[examples.example_ufno]
+        EX_UNET[examples.example_graph_unets]
+        EX_UNET_FW[examples.example_graph_unets_framework]
+        EX_QK[examples.example_qk_norm]
+        EX_RPE[examples.example_relative_position_attention]
+        EX_LWT[examples.example_low_width_graph_transformer]
+        EX_GNN_SOLVER[examples.example_gnn_solver]
     end
 
     subgraph "Utils"
@@ -74,12 +88,31 @@ graph TB
     PROC --> MLP
     PROC --> FUNC
     PROC --> AGG
+    PROC --> PROT
+    PROC --> EDGEPROC
+    PROC --> EDGEASM
+    PROC --> NODEUP
+    PROC --> VAL
+
+    EDGEPROC --> GRAPH
+    EDGEPROC --> FUNC
+    EDGEPROC --> MLP
+    EDGEPROC --> AGG
+    EDGEPROC --> PROT
+
+    EDGEASM --> GRAPH
+
+    NODEUP --> MLP
+    NODEUP --> PROT
+
+    VAL --> PROT
 
     GCN --> GRAPH
     GCN --> MLP
 
     TRANS --> MLP
     TRANS --> PROT
+    TRANS --> ATTN
 
     ATTN --> MLP
     ATTN --> TORCH
@@ -107,6 +140,11 @@ graph TB
 
     LAYERS --> TORCH
 
+    MULTI --> GRAPH
+    MULTI --> MLP
+    MULTI --> SPECT
+    MULTI --> GCN
+
     %% Models depend on Components AND Core
     EPD --> GRAPH
     EPD --> PROT
@@ -121,27 +159,61 @@ graph TB
     FNO --> REG
     FNO --> SPECT
 
-    MSFNO --> REG
     MSFNO --> SPECT
+    MSFNO --> MULTI
 
     %% Examples depend on everything
-    EX_MESH --> GNN
+    EX_MESH --> REG
+    EX_MESH --> FUNC
+
     EX_GNN --> PROC
     EX_GNN --> REG
+    EX_GNN --> EDGEPROC
 
-    EX_FNO --> FNO
+    EX_FNO --> SPECT
+    EX_FNO --> REG
 
-    EX_TRANS --> TRANS
     EX_TRANS --> ATTN
+    EX_TRANS --> REG
 
-    EX_UNI --> TRANS
+    EX_TRANS3 --> ATTN
+    EX_TRANS3 --> REG
+
+    EX_GEO --> ATTN
+    EX_GEO --> REG
+
+    EX_UNI --> ATTN
+    EX_UNI --> COND
+    EX_UNI --> REG
 
     EX_WIND --> PROBE
+    EX_WIND --> PROC
+    EX_WIND --> RBF
+    EX_WIND --> REG
 
-    EX_DEEP --> FOURIER
-    EX_DEEP --> MLP
+    EX_MGKN --> MULTI
+    EX_MGKN --> REG
 
-    TRAINING --> TORCH
+    EX_UFNO --> SPECT
+    EX_UFNO --> MULTI
+    EX_UFNO --> MSFNO
+    EX_UFNO --> REG
+
+    EX_UNET --> MULTI
+    EX_UNET --> GCN
+
+    EX_UNET_FW --> MULTI
+    EX_UNET_FW --> GCN
+    EX_UNET_FW --> GNN
+    EX_UNET_FW --> EPD
+    EX_UNET_FW --> DEC
+
+    EX_QK --> ATTN
+    EX_RPE --> ATTN
+    EX_LWT --> ATTN
+
+    EX_GNN_SOLVER --> EPD
+    EX_GNN_SOLVER --> REG
 
     %% Utils dependencies
     GRAPH_UTILS --> TORCH
@@ -159,9 +231,9 @@ graph TB
     classDef optional fill:#ffe066,stroke:#fab005,stroke-dasharray: 5 5
 
     class BASE,GRAPH,MLP,FUNC,AGG,REG,PROT core
-    class PROC,GCN,TRANS,ATTN,COND,TEMP,SPECT,DEC,PROBE,RBF,FOURIER,LAYERS component
+    class PROC,EDGEPROC,EDGEASM,NODEUP,VAL,GCN,TRANS,ATTN,COND,TEMP,SPECT,DEC,PROBE,RBF,FOURIER,LAYERS,MULTI component
     class EPD,GNN,FNO,MSFNO model
-    class EX_MESH,EX_GNN,EX_FNO,EX_TRANS,EX_UNI,EX_WIND,EX_DEEP,TRAINING example
+    class EX_MESH,EX_GNN,EX_FNO,EX_TRANS,EX_TRANS3,EX_GEO,EX_UNI,EX_WIND,EX_MGKN,EX_UFNO,EX_UNET,EX_UNET_FW,EX_QK,EX_RPE,EX_LWT,EX_GNN_SOLVER example
 ```
 
 ## Layer Architecture
@@ -237,7 +309,8 @@ TypeScript-style structural protocols for component contracts.
 from gnn_pde_v2.core.protocols import (
     Modulation, ConditioningProtocol,
     GraphEncoder, GraphProcessor, NodeDecoder, QueryDecoder, Decoder,
-    GraphModel, PositionEncoder, GridProcessor, GridModel
+    GraphModel, PositionEncoder, GridProcessor, GridModel,
+    NodeUpdateStrategy, EdgeMessageProcessor, EdgeFeatureAssembler,
 )
 ```
 
@@ -249,10 +322,50 @@ from gnn_pde_v2.core.protocols import (
 | `MessagePassingBase` | Abstract base for graph message passing |
 | `GraphNetBlock` | DeepMind-style node/edge update |
 | `EdgeConditionedConvBlock` | Edge-conditioned convolution |
+| `EdgeConvBlock` | DGCNN-style edge convolution |
 | `GENBlock` | Graph Edges Networks block |
 | `GlobalGraphNetBlock` | Full encoder-processor-decoder with globals |
+| `GraphNetProcessor`, `GlobalGraphNetProcessor` | Stack wrappers around the blocks |
 | `GCNBlock`, `GCNBlockWithEdgeFeatures` | Graph Convolutional Networks |
 | `TransformerBlock`, `TransformerProcessor` | Transformer for graphs |
+
+### Edge message processors (`components.edge_processors`)
+Pluggable transforms used inside `EdgeConditionedConvBlock`. All satisfy
+`EdgeMessageProcessor` protocol.
+| Module | Description |
+|--------|-------------|
+| `FullEdgeMessageProcessor` | Full-rank per-edge weight matrix |
+| `VectorEdgeMessageProcessor` | Per-channel scalar weights |
+| `ScalarEdgeMessageProcessor` | Single scalar weight per edge |
+| `LowRankEdgeMessageProcessor` | Low-rank factorised weights |
+
+### Edge feature assemblers (`components.edge_assemblers`)
+Pluggable strategies for building edge features inside `EdgeConvBlock`.
+All satisfy `EdgeFeatureAssembler` protocol.
+| Module | Description |
+|--------|-------------|
+| `NodeDifferenceAssembler` | `x_j - x_i` (DGCNN default) |
+| `ConcatAssembler` | `[x_i; x_j]` |
+| `DifferenceOnlyAssembler` | `x_j - x_i` without concatenation |
+| `ConcatWithEdgesAssembler` | `[x_i; x_j; e_ij]` with edge attrs |
+
+### Node updaters (`components.node_updaters`)
+Pluggable node-update rules satisfying `NodeUpdateStrategy`.
+| Module | Description |
+|--------|-------------|
+| `ConcatMLPNodeUpdater` | `MLP([v_i; a_i])` (default for `GraphNetBlock`) |
+| `RootWeightNodeUpdater` | `a_i + v_i @ W + b` (default for `EdgeConditionedConvBlock`) |
+| `PassThroughNodeUpdater` | `a_i` (default for `EdgeConvBlock`) |
+| `ResidualMLPNodeUpdater` | `MLP(v_i + a_i)` (default for `GENBlock`) |
+| `build_*_node_updater`, `*_factory` | Builder/factory helpers |
+
+### Processor validators (`components.processor_validators`)
+| Module | Description |
+|--------|-------------|
+| `validate_edge_message_processor` | Construction-time shape check |
+| `verify_edge_message_pipeline` | End-to-end pipeline check |
+| `verify_edge_transform_output` | Validate edge transform output |
+| `infer_module_tensor_kwargs`, `reset_linear_layers` | Helper utilities |
 
 ### Attention Mechanisms
 | Module | Description |
@@ -299,6 +412,16 @@ from gnn_pde_v2.core.protocols import (
 | `ProbeDecoder` | Query-based decoder |
 | `WindFarmGNO` | Wind farm-specific GNO |
 
+### Multiscale (`components.multiscale`)
+| Module | Description |
+|--------|-------------|
+| `GraphPool`, `GraphUnpool` | Top-k gPool / gUnpool layers |
+| `HierarchicalGraph`, `build_hierarchical_graphs` | Multi-resolution hierarchy |
+| `compute_transition_matrix`, `restrict_to_coarse`, `prolong_to_fine` | Inter-grid transfer ops |
+| `GraphUNetProcessor` | Graph U-Net processor (Gao & Ji 2019) |
+| `MGKNProcessor` | Multipole GNO processor (Li et al. 2020) |
+| `MultiResolutionFNOBlock`, `UFNOBlock`, `HierarchicalFNOBlock`, `MiniUNet` | Spectral multiscale blocks |
+
 ## Models Layer
 
 ### Lazy Loading
@@ -324,6 +447,12 @@ from gnn_pde_v2.core import MODEL_REGISTRY
 
 model = MODEL_REGISTRY.create('graphnet', node_in_dim=11, edge_in_dim=3, out_dim=3)
 ```
+
+### Other Models (not auto-registered)
+| Module | Description |
+|--------|-------------|
+| `models.encode_process_decode.EncodeProcessDecode` | Eagerly imported; encoder/processor/decoder combinator |
+| `models.multiscale_fno.MultiscaleFNO` | Multiscale FNO built on `components.multiscale` blocks; import directly |
 
 ## Optional Dependencies
 
@@ -353,14 +482,18 @@ graph LR
 
 ### Package Root (`gnn_pde_v2`)
 ```python
-from gnn_pde_v2 import GraphsTuple, BaseModel
-from gnn_pde_v2 import scatter_sum, scatter_mean, aggregate_edges
+from gnn_pde_v2 import (
+    GraphsTuple, GraphTopology, batch_graphs, unbatch_graphs,
+    BaseModel,
+    scatter_sum, scatter_mean, scatter_max, scatter_min, scatter_softmax,
+    aggregate_edges, broadcast_nodes_to_edges, broadcast_global, aggregate_to_global,
+)
 ```
 
 ### Core (`gnn_pde_v2.core`)
 ```python
 from gnn_pde_v2.core import (
-    GraphsTuple, batch_graphs, unbatch_graphs,
+    GraphsTuple, GraphTopology, batch_graphs, unbatch_graphs,
     BaseModel, MLP, SinActivation,
     AutoRegisterModel, MODEL_REGISTRY,
     scatter_sum, scatter_mean, scatter_max, scatter_min, scatter_softmax,
@@ -368,7 +501,8 @@ from gnn_pde_v2.core import (
     Aggregation, Sum, Mean, Max, Min, get_aggregation,
     # Protocols
     Modulation, ConditioningProtocol,
-    GraphEncoder, GraphProcessor, NodeDecoder, QueryDecoder, Decoder, GraphModel,
+    GraphEncoder, GraphProcessor, NodeUpdateStrategy,
+    NodeDecoder, QueryDecoder, Decoder, GraphModel,
     PositionEncoder, GridProcessor, GridModel,
 )
 ```
@@ -381,11 +515,25 @@ from gnn_pde_v2.components import (
     # Layers
     Residual, GatedResidual, make_residual,
     # Processors
-    MessagePassingBase, GraphNetBlock, GraphNetProcessor,
+    GraphBlockBase, MessagePassingBase,
+    GraphNetBlock, GraphNetProcessor,
     EdgeConditionedConvBlock, EdgeConvBlock, GENBlock,
     GlobalGraphNetBlock, GlobalGraphNetProcessor,
     GCNBlock, GCNBlockWithEdgeFeatures,
     TransformerBlock, TransformerProcessor,
+    # Edge message processors
+    FullEdgeMessageProcessor, VectorEdgeMessageProcessor,
+    ScalarEdgeMessageProcessor, LowRankEdgeMessageProcessor,
+    # Edge feature assemblers
+    EdgeFeatureAssembler, NodeDifferenceAssembler,
+    ConcatAssembler, DifferenceOnlyAssembler, ConcatWithEdgesAssembler,
+    # Node updaters
+    ConcatMLPNodeUpdater, RootWeightNodeUpdater,
+    PassThroughNodeUpdater, ResidualMLPNodeUpdater,
+    build_concat_mlp_node_updater, build_root_weight_node_updater,
+    build_pass_through_node_updater, build_residual_mlp_node_updater,
+    NodeUpdaterFactory, concat_mlp_factory, root_weight_factory,
+    pass_through_factory, residual_mlp_factory, default_node_updater_factory,
     # Attention
     MultiHeadAttention, PhysicsTokenAttention, PhysicsTokenAttentionV3,
     TiledSliceOperation, QKNormMultiHeadAttention, SparseGraphAttention,
@@ -407,8 +555,18 @@ from gnn_pde_v2.components import (
     # RBF
     LearnableRBFEncoder, GaussianRBFEncoder,
     # Protocols (re-exported)
-    GraphEncoder, GraphProcessor, NodeDecoder, QueryDecoder, Decoder, GraphModel,
+    GraphEncoder, GraphProcessor, EdgeMessageProcessor,
+    NodeDecoder, QueryDecoder, Decoder, GraphModel,
     PositionEncoder, GridProcessor, GridModel,
+)
+
+# Multiscale — import explicitly from the subpackage:
+from gnn_pde_v2.components.multiscale import (
+    GraphPool, GraphUnpool,
+    HierarchicalGraph, build_hierarchical_graphs,
+    compute_transition_matrix, restrict_to_coarse, prolong_to_fine,
+    GraphUNetProcessor, MGKNProcessor,
+    MultiResolutionFNOBlock, UFNOBlock, HierarchicalFNOBlock, MiniUNet,
 )
 ```
 
