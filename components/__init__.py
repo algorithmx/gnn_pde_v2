@@ -92,6 +92,7 @@ from .probe import ProbeDecoder, WindFarmGNO, ProbeGraphBuilder
 from .rbf import LearnableRBFEncoder, GaussianRBFEncoder
 from .transformer import (
     TransformerBlock, TransformerProcessor,
+    PhysicsTokenConfig, RelativePositionConfig,
 )
 from .attention import (
     MultiHeadAttention, PhysicsTokenAttention, PhysicsTokenAttentionV3,
@@ -182,6 +183,8 @@ __all__ = [
     "GCNBlockWithEdgeFeatures",
     "TransformerBlock",
     "TransformerProcessor",
+    "PhysicsTokenConfig",
+    "RelativePositionConfig",
     "MultiHeadAttention",
     "PhysicsTokenAttention",
     "PhysicsTokenAttentionV3",

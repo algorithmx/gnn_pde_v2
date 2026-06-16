@@ -4,6 +4,7 @@ Transformer processor with optional physics tokens.
 Standard multi-head attention or Transolver-style slice-attention-deslice.
 """
 
+from dataclasses import dataclass, fields, replace
 from typing import Optional
 
 import torch
@@ -15,19 +16,127 @@ from ..core.mlp import MLP
 from ..core.graph import GraphsTuple
 from . import attention as _attention
 
-__all__ = ['TransformerBlock', 'TransformerProcessor']
+__all__ = [
+    'PhysicsTokenConfig',
+    'RelativePositionConfig',
+    'TransformerBlock',
+    'TransformerProcessor',
+]
 
-_PHYSICS_TOKEN_PARAMS = frozenset({
-    'n_tokens', 'temperature', 'temperature_mode', 'use_gumbel_softmax',
-    'min_temperature', 'anneal_warmup_epochs', 'anneal_factor',
-    'anneal_final_temp', 'use_slice_normalization', 'use_learnable_tokens',
-    'qkv_mode', 'use_orthogonal_init',
-})
-_POSITION_PARAMS = frozenset({
-    'position_dim', 'max_distance', 'num_position_buckets',
-    'position_encoding_type',
-})
-_warned_blocks = set()
+
+@dataclass
+class PhysicsTokenConfig:
+    """Settings for Transolver-style physics-token (slice) attention.
+
+    Consumed by :class:`TransformerBlock` / :class:`TransformerProcessor` only
+    when ``use_physics_tokens=True``; ignored otherwise.
+    """
+
+    n_tokens: int = 32
+    temperature: float = 0.5
+    temperature_mode: str = 'learnable_scalar'
+    use_gumbel_softmax: bool = False
+    min_temperature: float = 0.1
+    anneal_warmup_epochs: int = 5
+    anneal_factor: float = 0.98
+    anneal_final_temp: float = 0.05
+    use_slice_normalization: bool = True
+    use_learnable_tokens: bool = False
+    qkv_mode: str = 'direct'
+    use_orthogonal_init: bool = True
+
+
+@dataclass
+class RelativePositionConfig:
+    """Settings for relative position encoding in standard attention.
+
+    Consumed by :class:`TransformerBlock` / :class:`TransformerProcessor` only
+    when ``use_physics_tokens=False``; ignored when physics tokens are active.
+    """
+
+    position_dim: int = 2
+    max_distance: float = 10.0
+    num_position_buckets: int = 32
+    position_encoding_type: str = 'learned'
+
+
+# Field names backing the legacy flat-kwarg API, derived from the configs so the
+# two never drift apart.
+_PHYSICS_TOKEN_PARAMS = frozenset(f.name for f in fields(PhysicsTokenConfig))
+_POSITION_PARAMS = frozenset(f.name for f in fields(RelativePositionConfig))
+_warned_configs = set()
+
+
+def _resolve_transformer_configs(
+    use_physics_tokens: bool,
+    physics_token_config: Optional[PhysicsTokenConfig],
+    position_config: Optional[RelativePositionConfig],
+    legacy_kwargs: dict,
+) -> tuple[PhysicsTokenConfig, RelativePositionConfig]:
+    """Merge config objects with legacy per-parameter kwargs into a config pair.
+
+    This is the single place that understands the relationship between the two
+    attention modes and their parameter groups. It:
+
+    * routes each legacy kwarg into its owning config (or raises ``TypeError``
+      for unknown names),
+    * rejects passing both a config object and overlapping legacy kwargs,
+    * emits one ``UserWarning`` listing parameters that are silently ignored
+      given the active mode.
+
+    Returns the resolved ``(PhysicsTokenConfig, RelativePositionConfig)`` pair.
+    """
+    physics_overrides = {}
+    position_overrides = {}
+    unknown = []
+    for key, value in legacy_kwargs.items():
+        if key in _PHYSICS_TOKEN_PARAMS:
+            physics_overrides[key] = value
+        elif key in _POSITION_PARAMS:
+            position_overrides[key] = value
+        else:
+            unknown.append(key)
+    if unknown:
+        raise TypeError(f"Unexpected keyword arguments: {sorted(unknown)}")
+
+    if physics_token_config is not None and physics_overrides:
+        raise TypeError(
+            "Pass physics-token settings via physics_token_config OR as keyword "
+            f"arguments, not both. Conflicting keys: {sorted(physics_overrides)}"
+        )
+    if position_config is not None and position_overrides:
+        raise TypeError(
+            "Pass position settings via position_config OR as keyword arguments, "
+            f"not both. Conflicting keys: {sorted(position_overrides)}"
+        )
+
+    physics_cfg = physics_token_config or PhysicsTokenConfig()
+    if physics_overrides:
+        physics_cfg = replace(physics_cfg, **physics_overrides)
+    position_cfg = position_config or RelativePositionConfig()
+    if position_overrides:
+        position_cfg = replace(position_cfg, **position_overrides)
+
+    # Diagnose settings that do not apply to the active attention mode.
+    if use_physics_tokens:
+        ignored = sorted(position_overrides)
+        if position_config is not None:
+            ignored.append('position_config')
+    else:
+        ignored = sorted(physics_overrides)
+        if physics_token_config is not None:
+            ignored.append('physics_token_config')
+    if ignored:
+        key = (use_physics_tokens, tuple(ignored))
+        if key not in _warned_configs:
+            _warned_configs.add(key)
+            warnings.warn(
+                f"Ignored parameters when use_physics_tokens={use_physics_tokens}: {ignored}",
+                UserWarning,
+                stacklevel=3,
+            )
+    return physics_cfg, position_cfg
+
 
 
 class TransformerBlock(nn.Module):
@@ -36,6 +145,17 @@ class TransformerBlock(nn.Module):
     
     When use_physics_tokens=True, uses Transolver-style slice-attention-deslice
     attention which reduces complexity from O(N^2) to O(G^2) where G << N.
+
+    Mode-specific settings are grouped into two config objects:
+
+    * ``physics_token_config`` (:class:`PhysicsTokenConfig`) — active when
+      ``use_physics_tokens=True``.
+    * ``position_config`` (:class:`RelativePositionConfig`) — active when
+      ``use_physics_tokens=False``.
+
+    The individual fields of these configs may also be passed as flat keyword
+    arguments for backward compatibility; passing a setting that does not apply
+    to the active mode raises a ``UserWarning``.
     """
     
     def __init__(
@@ -45,72 +165,18 @@ class TransformerBlock(nn.Module):
         mlp_ratio: float = 4.0,
         dropout: float = 0.0,
         use_physics_tokens: bool = False,
-        n_tokens: int = 32,
         use_relative_positions: bool = False,
-        position_dim: int = 2,
-        max_distance: float = 10.0,
-        num_position_buckets: int = 32,
-        position_encoding_type: str = 'learned',
-        # Temperature parameters (only used when use_physics_tokens=True)
-        temperature: float = 0.5,
-        temperature_mode: str = 'learnable_scalar',
-        use_gumbel_softmax: bool = False,
-        min_temperature: float = 0.1,
-        anneal_warmup_epochs: int = 5,
-        anneal_factor: float = 0.98,
-        anneal_final_temp: float = 0.05,
-        # Paper-fidelity parameters (only used when use_physics_tokens=True)
-        use_slice_normalization: bool = True,
-        use_learnable_tokens: bool = False,
-        qkv_mode: str = 'direct',
-        use_orthogonal_init: bool = True,
+        physics_token_config: Optional[PhysicsTokenConfig] = None,
+        position_config: Optional[RelativePositionConfig] = None,
+        **legacy_kwargs,
     ):
         super().__init__()
 
-        # Parameter validation warnings
-        _defaults = {
-            'dim': None,
-            'n_heads': 8,
-            'mlp_ratio': 4.0,
-            'dropout': 0.0,
-            'use_physics_tokens': False,
-            'n_tokens': 32,
-            'use_relative_positions': False,
-            'position_dim': 2,
-            'max_distance': 10.0,
-            'num_position_buckets': 32,
-            'position_encoding_type': 'learned',
-            'temperature': 0.5,
-            'temperature_mode': 'learnable_scalar',
-            'use_gumbel_softmax': False,
-            'min_temperature': 0.1,
-            'anneal_warmup_epochs': 5,
-            'anneal_factor': 0.98,
-            'anneal_final_temp': 0.05,
-            'use_slice_normalization': True,
-            'use_learnable_tokens': False,
-            'qkv_mode': 'direct',
-            'use_orthogonal_init': True,
-        }
-        _vals = locals()
-        _ignored = []
-        if use_physics_tokens:
-            for _p in _POSITION_PARAMS:
-                if _vals[_p] != _defaults[_p]:
-                    _ignored.append(_p)
-        else:
-            for _p in _PHYSICS_TOKEN_PARAMS:
-                if _vals[_p] != _defaults[_p]:
-                    _ignored.append(_p)
-        if _ignored:
-            _key = (use_physics_tokens, tuple(sorted(_ignored)))
-            if _key not in _warned_blocks:
-                _warned_blocks.add(_key)
-                warnings.warn(
-                    f"Ignored parameters when use_physics_tokens={use_physics_tokens}: {sorted(_ignored)}",
-                    UserWarning,
-                    stacklevel=2,
-                )
+        # Resolve the two parameter groups (config objects + legacy flat kwargs)
+        # and warn about anything that does not apply to the active mode.
+        physics_cfg, position_cfg = _resolve_transformer_configs(
+            use_physics_tokens, physics_token_config, position_config, legacy_kwargs,
+        )
 
         self.norm1 = nn.LayerNorm(dim)
         self.use_physics_tokens = use_physics_tokens
@@ -119,29 +185,29 @@ class TransformerBlock(nn.Module):
         if use_physics_tokens:
             self.attn = _attention.PhysicsTokenAttention(
                 dim=dim,
-                n_tokens=n_tokens,
+                n_tokens=physics_cfg.n_tokens,
                 n_heads=n_heads,
                 dropout=dropout,
-                temperature=temperature,
-                temperature_mode=temperature_mode,
-                use_gumbel_softmax=use_gumbel_softmax,
-                min_temperature=min_temperature,
-                anneal_warmup_epochs=anneal_warmup_epochs,
-                anneal_factor=anneal_factor,
-                anneal_final_temp=anneal_final_temp,
-                use_slice_normalization=use_slice_normalization,
-                use_learnable_tokens=use_learnable_tokens,
-                qkv_mode=qkv_mode,
-                use_orthogonal_init=use_orthogonal_init,
+                temperature=physics_cfg.temperature,
+                temperature_mode=physics_cfg.temperature_mode,
+                use_gumbel_softmax=physics_cfg.use_gumbel_softmax,
+                min_temperature=physics_cfg.min_temperature,
+                anneal_warmup_epochs=physics_cfg.anneal_warmup_epochs,
+                anneal_factor=physics_cfg.anneal_factor,
+                anneal_final_temp=physics_cfg.anneal_final_temp,
+                use_slice_normalization=physics_cfg.use_slice_normalization,
+                use_learnable_tokens=physics_cfg.use_learnable_tokens,
+                qkv_mode=physics_cfg.qkv_mode,
+                use_orthogonal_init=physics_cfg.use_orthogonal_init,
             )
         else:
             self.attn = _attention.MultiHeadAttention(
                 dim, n_heads, dropout,
                 use_relative_positions=use_relative_positions,
-                position_dim=position_dim,
-                max_distance=max_distance,
-                num_position_buckets=num_position_buckets,
-                position_encoding_type=position_encoding_type,
+                position_dim=position_cfg.position_dim,
+                max_distance=position_cfg.max_distance,
+                num_position_buckets=position_cfg.num_position_buckets,
+                position_encoding_type=position_cfg.position_encoding_type,
             )
         
         self.norm2 = nn.LayerNorm(dim)
@@ -189,6 +255,12 @@ class TransformerProcessor(nn.Module):
 
     Can use full attention or physics-token attention for efficiency.
     Supports relative position encoding when graph.positions is available.
+
+    Mode-specific settings are grouped into ``physics_token_config``
+    (:class:`PhysicsTokenConfig`) and ``position_config``
+    (:class:`RelativePositionConfig`); the active config is forwarded to every
+    block. Their fields may also be passed as flat keyword arguments for
+    backward compatibility.
     """
 
     def __init__(
@@ -199,28 +271,21 @@ class TransformerProcessor(nn.Module):
         mlp_ratio: float = 4.0,
         dropout: float = 0.0,
         use_physics_tokens: bool = False,
-        n_tokens: int = 32,
         use_checkpoint: bool = False,
         use_relative_positions: bool = False,
-        position_dim: int = 2,
-        max_distance: float = 10.0,
-        num_position_buckets: int = 32,
-        position_encoding_type: str = 'learned',
-        # Temperature parameters (only used when use_physics_tokens=True)
-        temperature: float = 0.5,
-        temperature_mode: str = 'learnable_scalar',
-        use_gumbel_softmax: bool = False,
-        min_temperature: float = 0.1,
-        anneal_warmup_epochs: int = 5,
-        anneal_factor: float = 0.98,
-        anneal_final_temp: float = 0.05,
-        # Paper-fidelity parameters (only used when use_physics_tokens=True)
-        use_slice_normalization: bool = True,
-        use_learnable_tokens: bool = False,
-        qkv_mode: str = 'direct',
-        use_orthogonal_init: bool = True,
+        physics_token_config: Optional[PhysicsTokenConfig] = None,
+        position_config: Optional[RelativePositionConfig] = None,
+        **legacy_kwargs,
     ):
         super().__init__()
+
+        # Resolve parameter groups once, then hand the active config to every
+        # block so the per-block kwargs are not duplicated at the call site.
+        physics_cfg, position_cfg = _resolve_transformer_configs(
+            use_physics_tokens, physics_token_config, position_config, legacy_kwargs,
+        )
+        block_physics_cfg = physics_cfg if use_physics_tokens else None
+        block_position_cfg = None if use_physics_tokens else position_cfg
 
         self.use_checkpoint = use_checkpoint
         self.use_relative_positions = use_relative_positions
@@ -231,23 +296,9 @@ class TransformerProcessor(nn.Module):
                 mlp_ratio=mlp_ratio,
                 dropout=dropout,
                 use_physics_tokens=use_physics_tokens,
-                n_tokens=n_tokens,
                 use_relative_positions=use_relative_positions,
-                position_dim=position_dim,
-                max_distance=max_distance,
-                num_position_buckets=num_position_buckets,
-                position_encoding_type=position_encoding_type,
-                temperature=temperature,
-                temperature_mode=temperature_mode,
-                use_gumbel_softmax=use_gumbel_softmax,
-                min_temperature=min_temperature,
-                anneal_warmup_epochs=anneal_warmup_epochs,
-                anneal_factor=anneal_factor,
-                anneal_final_temp=anneal_final_temp,
-                use_slice_normalization=use_slice_normalization,
-                use_learnable_tokens=use_learnable_tokens,
-                qkv_mode=qkv_mode,
-                use_orthogonal_init=use_orthogonal_init,
+                physics_token_config=block_physics_cfg,
+                position_config=block_position_cfg,
             )
             for _ in range(n_layers)
         ])

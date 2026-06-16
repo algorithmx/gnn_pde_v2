@@ -731,12 +731,9 @@ class SparseGraphAttention(nn.Module):
         # Attention scores: ⟨Q_sender, K_receiver⟩ — [E, H]
         attn_scores = (q_e * k_e).sum(dim=-1)
 
-        # Apply temperature using canonical temperature module
-        # Temperature module expects [B, H, N, G], we have [E, H]
-        # Reshape: [E, H] → [1, H, E, 1] (batch=1, heads=H, items=E edges, group=1)
-        attn_scores_4d = attn_scores.T.unsqueeze(0).unsqueeze(-1)  # [1, H, E, 1]
-        _, attn_scores_4d = self.temperature_module(attn_scores_4d, x.unsqueeze(0))
-        attn_scores = attn_scores_4d.squeeze(0).squeeze(-1).T  # [H, E] → [E, H]
+        # Apply temperature via the canonical module (handles the layout
+        # adaptation between sparse [E, H] logits and the module's dense layout)
+        attn_scores = self._apply_temperature(attn_scores, x)
 
         # Sparse softmax: normalise over all edges arriving at the same receiver
         # scatter_softmax groups by receivers along dim=0 (the edge dimension)
@@ -752,6 +749,29 @@ class SparseGraphAttention(nn.Module):
         aggregated = aggregate_edges(weighted_v, receivers, num_nodes, method='sum')
 
         return self.out_proj(aggregated)
+
+    def _apply_temperature(
+        self, attn_scores: torch.Tensor, x: torch.Tensor
+    ) -> torch.Tensor:
+        """Scale per-edge attention logits with the canonical temperature module.
+
+        The shared temperature modules operate on the dense ``[B, H, N, G]``
+        attention layout used elsewhere in the framework, whereas sparse graph
+        attention produces per-edge logits of shape ``[E, H]``. This adapter is
+        the single place that bridges the two layouts: it lifts ``[E, H]`` into
+        the canonical ``[1, H, E, 1]`` form (batch=1, heads=H, items=E edges,
+        group=1), applies the module, and maps the result back to ``[E, H]``.
+
+        Args:
+            attn_scores: ``[E, H]`` — Raw per-edge attention logits.
+            x: ``[N, D]`` — Node features, forwarded to adaptive modules.
+
+        Returns:
+            ``[E, H]`` — Temperature-scaled logits.
+        """
+        scores_4d = attn_scores.t().unsqueeze(0).unsqueeze(-1)  # [E, H] → [1, H, E, 1]
+        _, scores_4d = self.temperature_module(scores_4d, x.unsqueeze(0))
+        return scores_4d.squeeze(-1).squeeze(0).t()  # [1, H, E, 1] → [E, H]
 
     def set_epoch(self, epoch: int):
         """Set current epoch for temperature annealing (if using annealed mode)."""
@@ -944,6 +964,49 @@ class PhysicsTokenAttention(nn.Module):
         
         return tokens, slice_weights
     
+    def _attend_tokens(self, tokens: torch.Tensor) -> torch.Tensor:
+        """Self-attention among the G physics tokens (the O(G^2) stage).
+
+        Args:
+            tokens: ``[B, H, G, d]`` — Sliced physics tokens.
+
+        Returns:
+            ``[B, H, G, d]`` — Attended tokens.
+        """
+        if self.qkv_mode == 'direct':
+            # Paper-faithful: direct per-head scaled dot-product attention
+            q = self.to_q(tokens)  # [B, H, G, d]
+            k = self.to_k(tokens)  # [B, H, G, d]
+            v = self.to_v(tokens)  # [B, H, G, d]
+            dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale  # [B, H, G, G]
+            attn = torch.softmax(dots, dim=-1)
+            return torch.matmul(attn, v)  # [B, H, G, d]
+
+        # Framework style: route through the MultiHeadAttention wrapper
+        B, H, G, d = tokens.shape
+        tokens = tokens.permute(0, 2, 1, 3).reshape(B, G, self.inner_dim)  # [B, G, D]
+        if self.tokens is not None:
+            tokens = tokens + self.tokens
+        tokens_out = self.token_attention(tokens)  # [B, G, D]
+        return tokens_out.reshape(B, G, H, d).permute(0, 2, 1, 3)  # [B, H, G, d]
+
+    def _deslice(
+        self, tokens_out: torch.Tensor, slice_weights: torch.Tensor
+    ) -> torch.Tensor:
+        """Distribute attended tokens back onto the N mesh points.
+
+        Args:
+            tokens_out: ``[B, H, G, d]`` — Attended physics tokens.
+            slice_weights: ``[B, H, N, G]`` — Point-to-token assignment weights.
+
+        Returns:
+            ``[B, N, inner_dim]`` — Per-point features (pre output projection).
+        """
+        # [B, H, G, d] @ [B, H, N, G].T -> [B, H, N, d]
+        out = torch.einsum('bhgd,bhng->bhnd', tokens_out, slice_weights)
+        B, H, N, d = out.shape
+        return out.permute(0, 2, 1, 3).reshape(B, N, self.inner_dim)  # [B, N, inner_dim]
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
         Args:
@@ -957,41 +1020,14 @@ class PhysicsTokenAttention(nn.Module):
             x = x.unsqueeze(0)
             single_batch = True
         
-        B, N, D = x.shape
-        H = self.n_heads
-        G = self.n_tokens
-        d = self.head_dim
-        
         # --- Slice: Project N points to G tokens ---
         tokens, slice_weights = self._compute_slice_tokens(x)
         
-        # --- Attention: Process G tokens ---
-        
-        if self.qkv_mode == 'direct':
-            # Paper-faithful: direct QKV attention on tokens
-            # tokens: [B, H, G, d]
-            q = self.to_q(tokens)  # [B, H, G, d]
-            k = self.to_k(tokens)  # [B, H, G, d]
-            v = self.to_v(tokens)  # [B, H, G, d]
-            
-            # Scaled dot-product attention
-            dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale  # [B, H, G, G]
-            attn = torch.softmax(dots, dim=-1)
-            tokens_out = torch.matmul(attn, v)  # [B, H, G, d]
-        else:
-            # Framework style: use MultiHeadAttention wrapper
-            tokens = tokens.permute(0, 2, 1, 3).reshape(B, G, D)  # [B, G, D]
-            if self.tokens is not None:
-                tokens = tokens + self.tokens
-            tokens_out = self.token_attention(tokens)  # [B, G, D]
-            tokens_out = tokens_out.reshape(B, G, H, d).permute(0, 2, 1, 3)  # [B, H, G, d]
+        # --- Attention: Process G tokens (O(G^2)) ---
+        tokens_out = self._attend_tokens(tokens)
         
         # --- Deslice: Distribute tokens back to N points ---
-        
-        # [B, H, G, d] @ [B, H, N, G].T -> [B, H, N, d]
-        out = torch.einsum('bhgd,bhng->bhnd', tokens_out, slice_weights)
-        out = out.permute(0, 2, 1, 3).reshape(B, N, self.inner_dim)  # [B, N, inner_dim]
-        
+        out = self._deslice(tokens_out, slice_weights)
         out = self.to_out(out)
         
         if single_batch:
@@ -1310,54 +1346,7 @@ class PhysicsTokenAttentionV3(PhysicsTokenAttention):
         else:
             return super()._compute_slice_tokens(x)
     
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """
-        Forward pass with Transolver-3 optimizations.
-        
-        Args:
-            x: [N, D] or [B, N, D] - Input features
-            
-        Returns:
-            [N, D] or [B, N, D] - Processed features
-        """
-        single_batch = False
-        if x.dim() == 2:
-            x = x.unsqueeze(0)
-            single_batch = True
-        
-        B, N, D = x.shape
-        H = self.n_heads
-        G = self.n_tokens
-        d = self.head_dim
-        
-        # --- Slice: Project N points to G tokens ---
-        tokens, slice_weights = self._compute_slice_tokens(x)
-        
-        # --- Attention: Process G tokens ---
-        
-        if self.qkv_mode == 'direct':
-            q = self.to_q(tokens)
-            k = self.to_k(tokens)
-            v = self.to_v(tokens)
-            
-            dots = torch.matmul(q, k.transpose(-1, -2)) * self.scale
-            attn = torch.softmax(dots, dim=-1)
-            tokens_out = torch.matmul(attn, v)
-        else:
-            tokens = tokens.permute(0, 2, 1, 3).reshape(B, G, D)
-            if self.tokens is not None:
-                tokens = tokens + self.tokens
-            tokens_out = self.token_attention(tokens)
-            tokens_out = tokens_out.reshape(B, G, H, d).permute(0, 2, 1, 3)
-        
-        # --- Deslice: Distribute tokens back to N points ---
-        
-        out = torch.einsum('bhgd,bhng->bhnd', tokens_out, slice_weights)
-        out = out.permute(0, 2, 1, 3).reshape(B, N, self.inner_dim)
-        
-        out = self.to_out(out)
-        
-        if single_batch:
-            out = out.squeeze(0)
-        
-        return out
+    # NOTE: forward() is intentionally inherited from PhysicsTokenAttention.
+    # The base forward already dispatches to self._compute_slice_tokens(x),
+    # so the tiling-aware override above is picked up automatically and the
+    # attention/deslice stages are shared verbatim — no duplication needed.

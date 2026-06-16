@@ -5,6 +5,35 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.6] - 2026-06-16
+
+### Transformer & Attention Structure Cleanup
+
+Resolved the remaining design smells tracked in
+`docs/issues_priority_sorted_transformer.md` while preserving behavior and
+backward compatibility (full suite: 425 pass, same 3 pre-existing failures).
+
+**Added** (`components/transformer.py`):
+- `PhysicsTokenConfig` and `RelativePositionConfig` dataclasses that group the
+  mode-specific settings previously duplicated as ~22 flat kwargs across
+  `TransformerBlock` and `TransformerProcessor`. Both classes now accept these
+  config objects; the legacy flat kwargs remain supported as a deprecation
+  shim. A single shared `_resolve_transformer_configs()` helper merges the two
+  sources, rejects unknown/conflicting kwargs, and emits the ignored-parameter
+  warning in one named place.
+
+**Changed** (`components/attention.py`):
+- Extracted `SparseGraphAttention._apply_temperature()` so the `[E, H] ↔
+  [1, H, E, 1]` layout adaptation between sparse logits and the canonical
+  temperature modules lives in one documented place instead of inline reshape
+  gymnastics.
+- Extracted `_attend_tokens()` and `_deslice()` stages from
+  `PhysicsTokenAttention.forward()`, mirroring the existing
+  `_compute_slice_tokens()` extraction. `PhysicsTokenAttentionV3` now inherits
+  the base `forward()` (its tiling-aware `_compute_slice_tokens` override is
+  dispatched automatically), removing ~50 lines of duplicated attention/deslice
+  code.
+
 ## [2.9.5] - 2026-06-16
 
 ### Refactor conditioning components and protocols for clarity and compatibility
