@@ -5,7 +5,15 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.5] - 2026-06-16
 
+### Refactor conditioning components and protocols for clarity and compatibility
+
+- Moved `Modulation` and `ConditioningProtocol` to `core.conditioning` for nominal typing.
+- Updated imports in various components to reflect new locations.
+- Added `validate_node_update_strategy` for construction-time validation of node-updater contracts.
+- Adjusted `EncodeProcessDecode` to use `is_query_decoder` attribute for dispatching.
+- Introduced tests for protocol conformance and dispatch correctness.
 
 ## [2.9.4] - 2026-06-16
 

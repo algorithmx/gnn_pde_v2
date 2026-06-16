@@ -55,6 +55,7 @@ from .node_updaters import (
 from .processor_validators import (
     reset_linear_layers,
     validate_edge_message_processor,
+    validate_node_update_strategy,
     verify_edge_message_pipeline,
     verify_edge_transform_output,
 )
@@ -162,6 +163,7 @@ class MessagePassingBase(GraphBlockBase, ABC):
         
         # Node-update strategy (composable)
         if node_updater is not None:
+            validate_node_update_strategy(node_updater, latent_dim)
             self.node_updater = node_updater
         else:
             self.node_updater = _default_node_updater(latent_dim)

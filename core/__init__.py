@@ -21,9 +21,8 @@ from .aggregation import (
 )
 from .mlp import MLP, SinActivation
 from .registry import AutoRegisterModel, MODEL_REGISTRY
+from .conditioning import Modulation, ConditioningProtocol
 from .protocols import (
-    Modulation,
-    ConditioningProtocol,
     GraphEncoder,
     GraphProcessor,
     NodeUpdateStrategy,

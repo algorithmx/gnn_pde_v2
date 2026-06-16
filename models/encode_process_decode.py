@@ -4,11 +4,11 @@ Encode-Process-Decode architecture.
 Core pattern from DeepMind Graph Nets.
 """
 
-from typing import Optional
+from typing import Optional, Union
 import torch
 from ..core.graph import GraphsTuple
 from ..core.base import BaseModel
-from ..core.protocols import GraphEncoder, GraphProcessor, Decoder, NodeDecoder, QueryDecoder
+from ..core.protocols import GraphEncoder, GraphProcessor, NodeDecoder, QueryDecoder
 
 
 class EncodeProcessDecode(BaseModel):
@@ -34,15 +34,17 @@ class EncodeProcessDecode(BaseModel):
         decoder: Decoder satisfying either :class:`~gnn_pde_v2.core.NodeDecoder`
             (``GraphsTuple → Tensor``) or :class:`~gnn_pde_v2.core.QueryDecoder`
             (``(GraphsTuple, Tensor) → Tensor``).  ``EncodeProcessDecode``
-            dispatches at runtime: ``query_positions`` is forwarded only when
-            the decoder satisfies ``QueryDecoder``.
+            dispatches on the decoder's ``is_query_decoder`` class attribute:
+            ``query_positions`` is forwarded only when ``is_query_decoder`` is
+            ``True``.  Node decoders (the default) never receive
+            ``query_positions``.
     """
     
     def __init__(
         self,
         encoder: GraphEncoder,
         processor: GraphProcessor,
-        decoder: Decoder,
+        decoder: Union[NodeDecoder, QueryDecoder],
     ):
         super().__init__()
         
@@ -71,9 +73,12 @@ class EncodeProcessDecode(BaseModel):
         # Process
         processed = self.processor(latent)
         
-        # Decode — dispatch on decoder kind so that NodeDecoder implementations
-        # are never called with the query_positions argument they don't accept.
-        if isinstance(self.decoder, QueryDecoder):
+        # Decode — dispatch on the decoder's declared kind so that NodeDecoder
+        # implementations are never called with the query_positions argument
+        # they don't accept. The discriminator is an explicit class attribute
+        # (``is_query_decoder``) rather than an isinstance check, because
+        # ``@runtime_checkable`` protocols cannot distinguish decoder signatures.
+        if getattr(self.decoder, "is_query_decoder", False):
             output = self.decoder(processed, query_positions)
         else:
             output = self.decoder(processed)

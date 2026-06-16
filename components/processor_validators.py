@@ -10,13 +10,14 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from ..core.protocols import EdgeMessageProcessor
+from ..core.protocols import EdgeMessageProcessor, NodeUpdateStrategy
 
 
 __all__ = [
     "infer_module_tensor_kwargs",
     "reset_linear_layers",
     "validate_edge_message_processor",
+    "validate_node_update_strategy",
     "verify_edge_message_pipeline",
     "verify_edge_transform_output",
 ]
@@ -49,6 +50,38 @@ def validate_edge_message_processor(
             f"got {processor_latent_dim} vs {latent_dim}"
         )
     return weight_out_dim
+
+
+def validate_node_update_strategy(
+    node_updater: NodeUpdateStrategy,
+    latent_dim: int,
+) -> None:
+    """Validate an injected node-update strategy against block expectations.
+
+    ``@runtime_checkable`` cannot verify the ``latent_dim`` attribute's type or
+    value, nor that the strategy is an ``nn.Module``; this helper closes that
+    gap at construction time (see ``docs/protocol_issues_2026_06.md`` §6).
+    """
+    if not isinstance(node_updater, nn.Module):
+        raise TypeError(
+            "node_updater must be an nn.Module to preserve parameter registration "
+            "and torch.compile() specialization"
+        )
+    if not isinstance(node_updater, NodeUpdateStrategy):
+        raise TypeError(
+            "node_updater must satisfy NodeUpdateStrategy protocol: "
+            "provide an int latent_dim and forward(nodes, aggregated)"
+        )
+    updater_latent_dim = node_updater.latent_dim
+    if not isinstance(updater_latent_dim, int) or updater_latent_dim <= 0:
+        raise ValueError(
+            f"node_updater.latent_dim must be a positive int, got {updater_latent_dim!r}"
+        )
+    if updater_latent_dim != latent_dim:
+        raise ValueError(
+            "node_updater latent_dim must match block latent_dim: "
+            f"got {updater_latent_dim} vs {latent_dim}"
+        )
 
 
 

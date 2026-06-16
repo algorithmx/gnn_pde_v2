@@ -4,14 +4,17 @@ Conditioning components for modulation-based architectures.
 Provides AdaLN (Adaptive Layer Normalization) and FiLM (Feature-wise Linear
 Modulation) conditioning mechanisms for transformer and other architectures.
 
-Note: Modulation and ConditioningProtocol are defined in core.protocols.
-Import them from there: ``from gnn_pde_v2.core.protocols import Modulation, ConditioningProtocol``
+Note: ``Modulation`` and ``ConditioningProtocol`` are defined in
+``gnn_pde_v2.core.conditioning``.  Import them from there:
+``from gnn_pde_v2.core.conditioning import Modulation, ConditioningProtocol``
+(they are also re-exported from ``gnn_pde_v2.core.protocols`` for backwards
+compatibility).
 """
 
 import torch.nn as nn
 from torch import Tensor
 
-from ..core.protocols import ConditioningProtocol, Modulation
+from ..core.conditioning import ConditioningProtocol, Modulation
 
 
 # =============================================================================

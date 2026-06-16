@@ -21,6 +21,16 @@ class FourierFeatureEncoder(nn.Module):
     Reference: Tancik et al. "Fourier Features Let Networks Learn High Frequency
     Functions in Low Dimensional Domains" (NeurIPS 2020)
 
+    Protocol conformance:
+        - ``forward(Tensor) -> Tensor`` makes this a
+          :class:`~gnn_pde_v2.core.protocols.PositionEncoder`.
+        - :meth:`encode_graph` (``GraphsTuple -> GraphsTuple``) is provided for
+          graph-level use but is **deliberately not** named ``forward``, so this
+          class does **not** satisfy
+          :class:`~gnn_pde_v2.core.protocols.GraphEncoder`.  Call
+          :meth:`encode_graph` explicitly (e.g. inside a wrapping encoder)
+          rather than passing this object where a ``GraphEncoder`` is expected.
+
     Args:
         input_dim: Dimension of input coordinates (e.g., 2 for 2D)
         num_fourier_features: Number of Fourier features (output_dim = 2 * this)

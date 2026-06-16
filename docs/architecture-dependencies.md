@@ -19,7 +19,8 @@ graph TB
         FUNC[core.functional<br/>scatter_*, aggregate_*]
         AGG[core.aggregation<br/>Aggregation, Sum, Mean, Max, Min]
         REG[core.registry<br/>AutoRegisterModel, MODEL_REGISTRY]
-        PROT[core.protocols<br/>ConditioningProtocol, GraphProcessor,<br/>NodeUpdateStrategy, EdgeMessageProcessor, etc.]
+        PROT[core.protocols<br/>GraphProcessor, NodeUpdateStrategy,<br/>EdgeMessageProcessor, NodeDecoder, QueryDecoder, etc.<br/>structural Protocols only]
+        CONDCORE[core.conditioning<br/>Modulation, ConditioningProtocol<br/>nominal ABCs]
     end
 
     subgraph "Components Layer"
@@ -82,6 +83,8 @@ graph TB
     AGG --> TORCH
     REG --> BASE
     PROT --> TORCH
+    CONDCORE --> TORCH
+    PROT -.->|re-export| CONDCORE
 
     %% Components depend on Core
     PROC --> GRAPH
@@ -118,6 +121,7 @@ graph TB
     ATTN --> TORCH
 
     COND --> PROT
+    COND --> CONDCORE
     COND --> MLP
 
     TEMP --> TORCH
@@ -230,7 +234,7 @@ graph TB
     classDef example fill:#74c0fc,stroke:#339af0
     classDef optional fill:#ffe066,stroke:#fab005,stroke-dasharray: 5 5
 
-    class BASE,GRAPH,MLP,FUNC,AGG,REG,PROT core
+    class BASE,GRAPH,MLP,FUNC,AGG,REG,PROT,CONDCORE core
     class PROC,EDGEPROC,EDGEASM,NODEUP,VAL,GCN,TRANS,ATTN,COND,TEMP,SPECT,DEC,PROBE,RBF,FOURIER,LAYERS,MULTI component
     class EPD,GNN,FNO,MSFNO model
     class EX_MESH,EX_GNN,EX_FNO,EX_TRANS,EX_TRANS3,EX_GEO,EX_UNI,EX_WIND,EX_MGKN,EX_UFNO,EX_UNET,EX_UNET_FW,EX_QK,EX_RPE,EX_LWT,EX_GNN_SOLVER example
@@ -241,7 +245,7 @@ graph TB
 ```mermaid
 graph LR
     direction TB
-    C1[Core<br/>base, graph, mlp, functional<br/>aggregation, registry, protocols] --> C2[Components<br/>processors, transformers, attention<br/>spectral, decoders, etc.]
+    C1[Core<br/>base, graph, mlp, functional<br/>aggregation, registry, protocols, conditioning] --> C2[Components<br/>processors, transformers, attention<br/>spectral, decoders, etc.]
     C2 --> C3[Models<br/>encode_process_decode<br/>gnn_model, fno_model, multiscale_fno]
     C1 --> C4[Examples<br/>example_*.py]
 
@@ -303,15 +307,36 @@ from gnn_pde_v2.core import Aggregation, Sum, Mean, Max, Min, get_aggregation
 ```
 
 ### core/protocols.py - Structural Protocols
-TypeScript-style structural protocols for component contracts.
+TypeScript-style **structural** protocols for component contracts. These are
+`@runtime_checkable`, but note that `runtime_checkable` only checks method
+*names*: `isinstance` cannot distinguish single-`forward` protocols
+(`GraphEncoder`/`GraphProcessor`/`NodeDecoder`/`GraphModel`, or the grid trio)
+from one another. They are static-typing / documentation hints, **not** runtime
+discriminators. Code that must branch on a component's role uses an explicit
+discriminator instead (e.g. `EncodeProcessDecode` dispatches on the decoder's
+`is_query_decoder` class attribute, not on `isinstance`).
 
 ```python
 from gnn_pde_v2.core.protocols import (
-    Modulation, ConditioningProtocol,
     GraphEncoder, GraphProcessor, NodeDecoder, QueryDecoder, Decoder,
     GraphModel, PositionEncoder, GridProcessor, GridModel,
     NodeUpdateStrategy, EdgeMessageProcessor, EdgeFeatureAssembler,
 )
+```
+
+`Modulation` and `ConditioningProtocol` are still importable from
+`core.protocols` for backwards compatibility, but they are **re-exports** —
+see `core/conditioning.py` below. `Decoder = Union[NodeDecoder, QueryDecoder]`
+is a deprecated alias kept only for import compatibility.
+
+### core/conditioning.py - Conditioning Primitives
+Home of the conditioning types, which are **nominal** ABCs (inheritance-based
+`nn.Module` subclasses), deliberately kept out of `core/protocols.py` so that
+the protocol module stays purely structural.
+
+```python
+from gnn_pde_v2.core.conditioning import Modulation, ConditioningProtocol, CondT
+# also re-exported (for compatibility) from gnn_pde_v2.core.protocols
 ```
 
 ## Components Layer
@@ -363,6 +388,7 @@ Pluggable node-update rules satisfying `NodeUpdateStrategy`.
 | Module | Description |
 |--------|-------------|
 | `validate_edge_message_processor` | Construction-time shape check |
+| `validate_node_update_strategy` | Construction-time check for injected node updaters (type + `latent_dim`) |
 | `verify_edge_message_pipeline` | End-to-end pipeline check |
 | `verify_edge_transform_output` | Validate edge transform output |
 | `infer_module_tensor_kwargs`, `reset_linear_layers` | Helper utilities |
@@ -405,12 +431,15 @@ Pluggable node-update rules satisfying `NodeUpdateStrategy`.
 | `FNOProcessor` | Full FNO processor |
 
 ### Decoders
-| Module | Description |
-|--------|-------------|
-| `MLPDecoder` | MLP-based node decoder |
-| `IndependentMLPDecoder` | Independent MLP decoder |
-| `ProbeDecoder` | Query-based decoder |
-| `WindFarmGNO` | Wind farm-specific GNO |
+Decoders carry an `is_query_decoder` class attribute that `EncodeProcessDecode`
+uses to decide whether to forward `query_positions` (replacing the old, broken
+`isinstance(decoder, QueryDecoder)` dispatch).
+| Module | Description | `is_query_decoder` |
+|--------|-------------|--------------------|
+| `MLPDecoder` | MLP-based node decoder | `False` |
+| `IndependentMLPDecoder` | Independent MLP decoder | `False` |
+| `ProbeDecoder` | Query-based decoder | `True` |
+| `WindFarmGNO` | Wind farm-specific GNO | n/a |
 
 ### Multiscale (`components.multiscale`)
 | Module | Description |
@@ -499,8 +528,9 @@ from gnn_pde_v2.core import (
     scatter_sum, scatter_mean, scatter_max, scatter_min, scatter_softmax,
     aggregate_edges, broadcast_nodes_to_edges,
     Aggregation, Sum, Mean, Max, Min, get_aggregation,
-    # Protocols
+    # Conditioning (canonical home: core.conditioning; re-exported here)
     Modulation, ConditioningProtocol,
+    # Protocols (structural)
     GraphEncoder, GraphProcessor, NodeUpdateStrategy,
     NodeDecoder, QueryDecoder, Decoder, GraphModel,
     PositionEncoder, GridProcessor, GridModel,
@@ -604,3 +634,10 @@ from gnn_pde_v2.utils import (
 - Added `components/temperature.py` for temperature mechanisms
 - Models use lazy loading pattern
 - Protocols defined in `core/protocols.py` and re-exported in components
+- Conditioning primitives (`Modulation`, `ConditioningProtocol`) live in
+  `core/conditioning.py`; `core/protocols.py` is now purely structural and only
+  re-exports them for backwards compatibility
+- `EncodeProcessDecode` dispatches on a decoder's `is_query_decoder` attribute
+  instead of `isinstance(decoder, QueryDecoder)`
+- Added `validate_node_update_strategy` (invoked by `MessagePassingBase`) to
+  enforce injected node-updater contracts at construction time

@@ -225,7 +225,12 @@ class ProbeDecoder(nn.Module):
         ...     k_nearest=3,
         ... )
     """
-    
+
+    #: Discriminator used by :class:`~gnn_pde_v2.models.EncodeProcessDecode`
+    #: to decide whether ``query_positions`` should be forwarded. Probe-based
+    #: decoders require explicit query positions.
+    is_query_decoder: bool = True
+
     def __init__(
         self,
         latent_dim: int,

@@ -16,6 +16,11 @@ class MLPDecoder(nn.Module):
     Outputs predictions at each node position.
     """
 
+    #: Discriminator used by :class:`~gnn_pde_v2.models.EncodeProcessDecode`
+    #: to decide whether ``query_positions`` should be forwarded. Node decoders
+    #: output at the graph's existing nodes and never receive query positions.
+    is_query_decoder: bool = False
+
     def __init__(
         self,
         latent_dim: int,
@@ -72,6 +77,10 @@ class IndependentMLPDecoder(nn.Module):
         hidden_dims: Hidden layer dimensions for each MLP
         activation: Activation function name
     """
+
+    #: Discriminator used by :class:`~gnn_pde_v2.models.EncodeProcessDecode`
+    #: to decide whether ``query_positions`` should be forwarded.
+    is_query_decoder: bool = False
 
     def __init__(
         self,
