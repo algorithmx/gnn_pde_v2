@@ -1,0 +1,13 @@
+........................................................................ [ 23%]
+........................................................................ [ 47%]
+........................................................................ [ 71%]
+........................................................................ [ 95%]
+..............                                                           [100%]
+=============================== warnings summary ===============================
+tests/test_core.py::TestScatterOperations::test_scatter_sum
+  /home/dabajabaza/Nutstore/Work/Project/gnn_pde_v2/core/functional.py:100: UserWarning: torch_scatter not available; falling back to pure PyTorch scatter. Install torch_scatter for better performance: pip install torch_scatter
+    return scatter(src, index, dim=dim, dim_size=dim_size, reduce='sum')
+
+-- Docs: https://docs.pytest.org/en/stable/how-to/capture-warnings.html
+302 passed, 1 warning in 5.87s
+exit_code=0

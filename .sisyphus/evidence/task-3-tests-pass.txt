@@ -1,0 +1,20 @@
+=== Task 3: Parameter validation warnings for TransformerBlock ===
+Date: 2026-05-12
+
+=== Test Results (temperature integration tests) ===
+14 passed in 0.17s
+
+=== Test Results (temperature + component tests combined) ===
+2 failed, 135 passed, 1 warning in 1.76s
+- 2 failures are pre-existing (unrelated to our changes):
+  1. test_prelu_string_creates_prelu_modules
+  2. test_get_aggregation_invalid_type
+- 1 warning: torch_scatter not available (pre-existing)
+
+=== Validation Scenarios ===
+1. non-physics-token + explicit temperature param → WARNING ✓
+2. physics-token + explicit position param → WARNING ✓
+3. non-physics-token + default params only → NO WARNING ✓
+4. physics-token + default params only → NO WARNING ✓
+5. non-physics-token + multiple ignored params → SINGLE WARNING listing all ✓
+6. Dedup: same ignored params twice → WARNING on first only ✓

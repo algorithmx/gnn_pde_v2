@@ -1,0 +1,58 @@
+{
+  "active_plan": "/home/dabajabaza/Nutstore/Work/Project/gnn_pde_v2/.sisyphus/plans/transformer-issue-fixes.md",
+  "started_at": "2026-05-12T09:21:20.620Z",
+  "session_ids": [
+    "ses_1e58b59a6ffeehBVgSJa1o2NIX",
+    "ses_1e464555affeeNF33wF7UQJajK",
+    "ses_1e463849dffeDKB1WeRab0vMkz",
+    "ses_1e4634934ffeL2Lv9q6YljPq0W",
+    "ses_1e4632605ffesOQ41nDo1ygeOE"
+  ],
+  "session_origins": {
+    "ses_1e58b59a6ffeehBVgSJa1o2NIX": "direct",
+    "ses_1e464555affeeNF33wF7UQJajK": "appended",
+    "ses_1e463849dffeDKB1WeRab0vMkz": "appended",
+    "ses_1e4634934ffeL2Lv9q6YljPq0W": "appended",
+    "ses_1e4632605ffesOQ41nDo1ygeOE": "appended"
+  },
+  "plan_name": "transformer-issue-fixes",
+  "agent": "atlas",
+  "task_sessions": {
+    "todo:1": {
+      "task_key": "todo:1",
+      "task_label": "1",
+      "task_title": "Delete `QKVProjectionType.TOKEN_SLICE` dead code (Issue #3)",
+      "session_id": "ses_1e480ffefffeeSTPSnvG1UtBAf",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-05-12T09:24:16.268Z"
+    },
+    "todo:3": {
+      "task_key": "todo:3",
+      "task_label": "3",
+      "task_title": "Add parameter validation warnings to TransformerBlock (Issue #4)",
+      "session_id": "ses_1e475b071ffe1CO5fItkvi7N7o",
+      "agent": "Sisyphus-Junior",
+      "category": "quick",
+      "updated_at": "2026-05-12T09:37:37.832Z"
+    },
+    "todo:4": {
+      "task_key": "todo:4",
+      "task_label": "4",
+      "task_title": "Fix SparseGraphAttention temperature reshape + new tests (Issue #6)",
+      "session_id": "ses_1e471f38effe5I07LoZ1xSR3Qg",
+      "agent": "Sisyphus-Junior",
+      "category": "unspecified-high",
+      "updated_at": "2026-05-12T09:45:05.208Z"
+    },
+    "final-wave:f1": {
+      "task_key": "final-wave:f1",
+      "task_label": "F1",
+      "task_title": "**Plan Compliance Audit** — `oracle`",
+      "session_id": "ses_1e4632605ffesOQ41nDo1ygeOE",
+      "agent": "Sisyphus-Junior",
+      "category": "deep",
+      "updated_at": "2026-05-12T10:00:23.998Z"
+    }
+  }
+}

@@ -1,0 +1,2 @@
+PASS: Task 6 extraction works
+exit_code=0
