@@ -5,6 +5,27 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.7] - 2026-06-26
+
+### Unify Model Base-Class & Registration
+
+Resolved the inconsistent model base-class and registration story tracked in
+`docs/architecture_issues.md` §1.
+
+**Changed:**
+- Removed the decorator/imperative write API (`@MODEL_REGISTRY.register` /
+  `.add()`) from `MODEL_REGISTRY`; all models now register exclusively through
+  `AutoRegisterModel` subclassing, providing a single canonical creation path.
+- `FNO`, `TFNO`, `AFNO`, and `MultiscaleFNO` now subclass `AutoRegisterModel`
+  (previously plain `nn.Module`), so `isinstance(m, BaseModel)` is `True` for
+  every shipped model.
+- `MultiscaleFNO` is registered under `multiscalefno` / `multiscale_fno` /
+  `msfno` and added to `_LAZY_MODELS` for consistent package exports.
+
+**Tests:**
+- `tests/test_fno.py::TestRegistryWriteApiRemoved` guards the removal of the
+  write API.
+
 ## [2.9.6] - 2026-06-16
 
 ### Transformer & Attention Structure Cleanup

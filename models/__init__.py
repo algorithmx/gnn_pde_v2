@@ -10,6 +10,7 @@ _LAZY_MODELS = {
     'AFNO': ('.fno_model', 'AFNO'),
     'GraphNet': ('.gnn_model', 'GraphNet'),
     'MeshGraphNet': ('.gnn_model', 'MeshGraphNet'),
+    'MultiscaleFNO': ('.multiscale_fno', 'MultiscaleFNO'),
 }
 
 __all__ = [
@@ -19,6 +20,7 @@ __all__ = [
     "AFNO",
     "GraphNet",
     "MeshGraphNet",
+    "MultiscaleFNO",
 ]
 
 

@@ -10,6 +10,7 @@ from typing import List, Optional, Tuple, Union
 import torch
 import torch.nn as nn
 
+from ..core.registry import AutoRegisterModel
 from ..components.spectral import _get_conv_nd, FNOBlock
 from ..components.multiscale import (
     MultiResolutionFNOBlock,
@@ -18,7 +19,7 @@ from ..components.multiscale import (
 )
 
 
-class MultiscaleFNO(nn.Module):
+class MultiscaleFNO(AutoRegisterModel, name='multiscalefno', aliases=['multiscale_fno', 'msfno']):
     """Multiscale FNO with enhanced spectral blocks.
     
     Supports multiple architectures:

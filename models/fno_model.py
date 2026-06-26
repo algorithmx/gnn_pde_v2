@@ -4,13 +4,11 @@ Convenience models for Fourier Neural Operators.
 
 from typing import List
 import torch
-import torch.nn as nn
-from ..core.registry import MODEL_REGISTRY
+from ..core.registry import AutoRegisterModel
 from ..components.spectral import FNOProcessor
 
 
-@MODEL_REGISTRY.register('fno', aliases=['fourier_no', 'fno2d'])
-class FNO(nn.Module):
+class FNO(AutoRegisterModel, name='fno', aliases=['fourier_no', 'fno2d']):
     """
     Fourier Neural Operator for regular grids.
     
@@ -64,8 +62,7 @@ class FNO(nn.Module):
         return self.fno(x)
 
 
-@MODEL_REGISTRY.register('tfno', aliases=['tensorized_fno'])
-class TFNO(nn.Module):
+class TFNO(AutoRegisterModel, name='tfno', aliases=['tensorized_fno']):
     """
     Tensorized Fourier Neural Operator (TFNO).
 
@@ -124,8 +121,7 @@ class TFNO(nn.Module):
         return self.fno(x)
 
 
-@MODEL_REGISTRY.register('afno', aliases=['adaptive_fno'])
-class AFNO(nn.Module):
+class AFNO(AutoRegisterModel, name='afno', aliases=['adaptive_fno']):
     """
     Adaptive Fourier Neural Operator.
     

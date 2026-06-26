@@ -623,6 +623,19 @@ class TestFNOModel:
         assert 'fourier_no' in MODEL_REGISTRY
         assert 'fno2d' in MODEL_REGISTRY
 
+    def test_is_base_model(self):
+        """FNO is registered via AutoRegisterModel, so it must be a BaseModel.
+
+        This locks in the discriminator fix documented in
+        ``docs/investigation-report-model-base-class-and-registration.md``
+        §3.3: FNO used to inherit from plain nn.Module and failed the
+        ``isinstance(BaseModel)`` check; it now inherits from
+        ``AutoRegisterModel`` and must pass it.
+        """
+        from gnn_pde_v2.core import BaseModel
+
+        assert isinstance(FNO(in_channels=1, out_channels=1, width=8), BaseModel)
+
 
 class TestTFNOModel:
     """Test TFNO (Tensorized FNO) model class."""
@@ -655,6 +668,12 @@ class TestTFNOModel:
         assert 'tfno' in MODEL_REGISTRY
         assert 'tensorized_fno' in MODEL_REGISTRY
 
+    def test_is_base_model(self):
+        """TFNO is registered via AutoRegisterModel, so it must be a BaseModel."""
+        from gnn_pde_v2.core import BaseModel
+
+        assert isinstance(TFNO(in_channels=1, out_channels=1, width=8), BaseModel)
+
 
 class TestAFNOModel:
     """Test AFNO (Adaptive FNO) model class."""
@@ -682,6 +701,20 @@ class TestAFNOModel:
         for block in processor.blocks:
             assert isinstance(block, AFNOBlock)
             assert not isinstance(block, SpectralBlockBase)
+
+    def test_model_registry(self):
+        """Test model is registered (previously missing for AFNO)."""
+        from gnn_pde_v2.core.registry import MODEL_REGISTRY
+
+        assert 'afno' in MODEL_REGISTRY
+        assert 'adaptive_fno' in MODEL_REGISTRY
+
+    def test_is_base_model(self):
+        """AFNO is registered via AutoRegisterModel, so it must be a BaseModel."""
+        from gnn_pde_v2.core import BaseModel
+
+        assert isinstance(AFNO(in_channels=1, out_channels=1, width=64, num_blocks=8), BaseModel)
+
     @pytest.mark.skipif(not torch.cuda.is_available(), reason="CUDA not available")
     def test_cuda(self):
         """Test on CUDA if available."""
@@ -736,3 +769,31 @@ class TestEdgeCases:
         assert out.shape == x.shape
         # With random weights, output should genuinely differ
         assert not torch.allclose(out, x)
+
+
+class TestRegistryWriteApiRemoved:
+    """AutoRegisterModel is the unique registration method.
+
+    The decorator / imperative registration API has been removed from
+    ``MODEL_REGISTRY``: the only way to register a model is to subclass
+    ``AutoRegisterModel``. These assertions guard against re-introducing a
+    competing registration surface.
+    """
+
+    def test_model_registry_has_no_register_decorator(self):
+        from gnn_pde_v2.core.registry import MODEL_REGISTRY
+
+        assert not hasattr(MODEL_REGISTRY, 'register')
+
+    def test_model_registry_has_no_add_method(self):
+        from gnn_pde_v2.core.registry import MODEL_REGISTRY
+
+        assert not hasattr(MODEL_REGISTRY, 'add')
+
+    def test_all_fno_family_models_are_base_model(self):
+        """FNO/TFNO/AFNO all register via AutoRegisterModel and thus are BaseModel."""
+        from gnn_pde_v2.core import BaseModel
+
+        assert isinstance(FNO(in_channels=1, out_channels=1, width=8), BaseModel)
+        assert isinstance(TFNO(in_channels=1, out_channels=1, width=8), BaseModel)
+        assert isinstance(AFNO(in_channels=1, out_channels=1, width=64, num_blocks=8), BaseModel)

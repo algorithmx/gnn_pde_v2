@@ -30,7 +30,7 @@ graph TB
         NODEUP[components.node_updaters<br/>ConcatMLPNodeUpdater,<br/>RootWeightNodeUpdater, ...]
         VAL[components.processor_validators<br/>verify_edge_message_pipeline, ...]
         GCN[components.gcn<br/>GCNBlock, GCNBlockWithEdgeFeatures]
-        TRANS[components.transformer<br/>TransformerBlock, TransformerProcessor]
+        TRANS[components.transformer<br/>TransformerBlock, TransformerProcessor,<br/>PhysicsTokenConfig, RelativePositionConfig]
         ATTN[components.attention<br/>MultiHeadAttention, PhysicsTokenAttention,<br/>QKNorm, SparseGraphAttention]
         COND[components.conditioning<br/>AdaLN, DualAdaLN, FiLM, ZeroConditioning]
         TEMP[components.temperature<br/>TemperatureBase, AdaptiveTemperature, AnnealedTemperature]
@@ -267,21 +267,20 @@ from gnn_pde_v2.core import BaseModel
 ```
 
 ### core/registry.py - ModelRegistry & AutoRegisterModel
-Two registration mechanisms:
-1. **ModelRegistry** - Standalone registry object with decorator/imperative APIs
-2. **AutoRegisterModel** - Base class that auto-registers subclasses
+**One** registration mechanism. `ModelRegistry` is a shared name→class store
+(`MODEL_REGISTRY`) that exposes only lookup / creation / introspection APIs — it
+has **no** public write surface. The sole way to add a model is to subclass
+`AutoRegisterModel`, which registers the class from `__init_subclass__`. The old
+`@MODEL_REGISTRY.register` decorator / imperative `add()` API has been removed.
 
 ```python
 from gnn_pde_v2.core import MODEL_REGISTRY, AutoRegisterModel
 
-# Decorator style
-@MODEL_REGISTRY.register('my_model', aliases=['mymodel'])
-class MyModel(nn.Module):
+# The only registration path: subclass AutoRegisterModel
+class MyModel(AutoRegisterModel, name='my_model', aliases=['mymodel']):
     ...
 
-# Base class style
-class MyModel(AutoRegisterModel, name='my_model'):
-    ...
+model = MODEL_REGISTRY.create('my_model')   # or by alias
 ```
 
 ### core/graph.py - GraphsTuple
@@ -352,7 +351,8 @@ from gnn_pde_v2.core.conditioning import Modulation, ConditioningProtocol, CondT
 | `GlobalGraphNetBlock` | Full encoder-processor-decoder with globals |
 | `GraphNetProcessor`, `GlobalGraphNetProcessor` | Stack wrappers around the blocks |
 | `GCNBlock`, `GCNBlockWithEdgeFeatures` | Graph Convolutional Networks |
-| `TransformerBlock`, `TransformerProcessor` | Transformer for graphs |
+| `TransformerBlock`, `TransformerProcessor` | Transformer for graphs (standard or physics-token attention) |
+| `PhysicsTokenConfig`, `RelativePositionConfig` | Grouped settings for the two transformer attention modes |
 
 ### Edge message processors (`components.edge_processors`)
 Pluggable transforms used inside `EdgeConditionedConvBlock`. All satisfy
@@ -457,12 +457,15 @@ uses to decide whether to forward `query_positions` (replacing the old, broken
 Models use lazy loading for optional dependencies:
 
 ```python
-from gnn_pde_v2.models import FNO, TFNO, AFNO, GraphNet, MeshGraphNet
+from gnn_pde_v2.models import FNO, TFNO, AFNO, GraphNet, MeshGraphNet, MultiscaleFNO
 
 # These are lazily loaded - raises ImportError with helpful message if deps missing
 ```
 
 ### Registered Models
+All registered models subclass `AutoRegisterModel` — there is exactly one
+registration method (the `@MODEL_REGISTRY.register` decorator / imperative
+`add()` API has been removed).
 | Name | Aliases | Type |
 |------|---------|------|
 | `graphnet` | gnn, graph_net | Graph |
@@ -470,6 +473,7 @@ from gnn_pde_v2.models import FNO, TFNO, AFNO, GraphNet, MeshGraphNet
 | `fno` | fourier_no, fno2d | Grid |
 | `tfno` | tensorized_fno | Grid |
 | `afno` | adaptive_fno | Grid |
+| `multiscalefno` | multiscale_fno, msfno | Grid |
 
 ```python
 from gnn_pde_v2.core import MODEL_REGISTRY
@@ -480,8 +484,7 @@ model = MODEL_REGISTRY.create('graphnet', node_in_dim=11, edge_in_dim=3, out_dim
 ### Other Models (not auto-registered)
 | Module | Description |
 |--------|-------------|
-| `models.encode_process_decode.EncodeProcessDecode` | Eagerly imported; encoder/processor/decoder combinator |
-| `models.multiscale_fno.MultiscaleFNO` | Multiscale FNO built on `components.multiscale` blocks; import directly |
+| `models.encode_process_decode.EncodeProcessDecode` | Eagerly imported; encoder/processor/decoder combinator (not a user-facing model) |
 
 ## Optional Dependencies
 
@@ -551,6 +554,7 @@ from gnn_pde_v2.components import (
     GlobalGraphNetBlock, GlobalGraphNetProcessor,
     GCNBlock, GCNBlockWithEdgeFeatures,
     TransformerBlock, TransformerProcessor,
+    PhysicsTokenConfig, RelativePositionConfig,
     # Edge message processors
     FullEdgeMessageProcessor, VectorEdgeMessageProcessor,
     ScalarEdgeMessageProcessor, LowRankEdgeMessageProcessor,

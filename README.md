@@ -80,8 +80,8 @@ output = model(graph)  # [10, 2]
 | Component | Description |
 |-----------|-------------|
 | `BaseModel` | Minimal marker class (no magic, no registry) |
-| `AutoRegisterModel` | Auto-registers subclasses in MODEL_REGISTRY |
-| `MODEL_REGISTRY` | Standalone registry with create(), register(), list_models() |
+| `AutoRegisterModel` | The single registration method — subclasses auto-register in MODEL_REGISTRY |
+| `MODEL_REGISTRY` | Shared name → class store with create(), list_models(), get_model_info() (lookup only) |
 
 ### MLP & Activations
 | Component | Description |
@@ -243,6 +243,7 @@ from gnn_pde_v2.models import (
 | `fno` | fourier_no, fno2d | Grid | Fourier Neural Operator |
 | `tfno` | tensorized_fno | Grid | Tensorized FNO |
 | `afno` | adaptive_fno | Grid | Adaptive FNO |
+| `multiscalefno` | multiscale_fno, msfno | Grid | Multiscale / U-FNO / hierarchical FNO |
 
 ### Using the Registry
 

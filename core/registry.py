@@ -1,51 +1,40 @@
 """
 Model registry for the GNN-PDE framework.
 
-Two complementary registration mechanisms are provided:
+There is exactly **one** registration mechanism: subclass
+:class:`AutoRegisterModel` and pass ``name=`` (plus optional ``aliases=`` and
+``namespace=``). Every registered model is written to the shared
+:data:`MODEL_REGISTRY` store, which exposes only lookup / creation /
+introspection APIs — it is no longer mutated directly by user code::
 
-1. **`ModelRegistry`** — a standalone registry object that can be instantiated,
-   injected, and replaced independently of any model base class.  The
-   module-level singleton :data:`MODEL_REGISTRY` is the default registry used
-   by the whole framework::
+    from gnn_pde_v2.core import AutoRegisterModel, MODEL_REGISTRY
 
-       from gnn_pde_v2.core import MODEL_REGISTRY
+    class MyModel(AutoRegisterModel, name='my_model', aliases=['mymodel']):
+        def __init__(self, dim: int = 128) -> None:
+            super().__init__()
+            self.net = nn.Linear(dim, dim)
 
-       # Instantiate a registered model by name
-       model = MODEL_REGISTRY.create('graphnet', node_in_dim=11, edge_in_dim=3, out_dim=3)
+    # Instantiate a registered model by name
+    model = MODEL_REGISTRY.create('my_model', dim=256)
+    model = MODEL_REGISTRY.create('mymodel', dim=256)   # alias
 
-       # Register an external class (no inheritance required)
-       @MODEL_REGISTRY.register('my_model', aliases=['mymodel'])
-       class MyModel(nn.Module):
-           ...
+    # Register under a namespace
+    class MySolver(AutoRegisterModel, name='solver', namespace='mylib'):
+        ...
 
-       # Register with namespace
-       @MODEL_REGISTRY.register('solver', namespace='mylib')
-       class MySolver(nn.Module):
-           ...
+    # Inspect
+    print(MODEL_REGISTRY.list_models())
+    print(MODEL_REGISTRY)   # ModelRegistry(afno, fno, graphnet, ...)
 
-       # Inspect
-       print(MODEL_REGISTRY.list_models())
-       print(MODEL_REGISTRY)   # ModelRegistry(afno, fno, graphnet, ...)
-
-2. **`AutoRegisterModel`** — opt-in base class that auto-registers subclasses
-   in :data:`MODEL_REGISTRY` via ``__init_subclass__``.  All class-method
-   operations (``create``, ``list_models``, …) delegate to
-   :data:`MODEL_REGISTRY` so both entry-points are always in sync::
-
-       class MyModel(AutoRegisterModel, name='my_model', aliases=['mymodel']):
-           def __init__(self, dim: int = 128) -> None:
-               super().__init__()
-               self.net = nn.Linear(dim, dim)
-
-       # Either entry-point works
-       m1 = AutoRegisterModel.create('my_model', dim=256)
-       m2 = MODEL_REGISTRY.create('mymodel', dim=256)   # alias
+Subclassing :class:`AutoRegisterModel` is the only supported way to add a model
+to the registry. To opt a class *out* of registration, inherit from
+:class:`~gnn_pde_v2.core.BaseModel` (or plain ``nn.Module``) instead.
 """
 
 from __future__ import annotations
 
 import warnings
-from typing import Callable, ClassVar, Dict, List, Optional, Type
+from typing import ClassVar, Dict, List, Optional, Type
 
 import torch.nn as nn
 
@@ -57,33 +46,33 @@ from .base import BaseModel
 # ---------------------------------------------------------------------------
 
 class ModelRegistry:
-    """Standalone model registry.
+    """Shared model registry for name -> class lookup.
 
-    Can be instantiated to create independent registries (e.g. for testing,
-    plugins, or domain-specific subsets), or used via the module-level
-    singleton :data:`MODEL_REGISTRY`.
+    Holds the ``name -> class`` mapping that :class:`AutoRegisterModel`
+    writes to at subclass-definition time. It exposes lookup / creation /
+    introspection / removal APIs, but does **not** expose a public write
+    surface: the only way to add a model is to subclass
+    :class:`AutoRegisterModel`.
+
+    Can also be instantiated to build independent registries (e.g. for
+    testing or plugins) that an :class:`AutoRegisterModel` subclass can
+    target via the ``registry=`` class keyword.
 
     Example::
 
         from gnn_pde_v2.core import MODEL_REGISTRY
 
-        # Decorator registration — no inheritance required
-        @MODEL_REGISTRY.register('unet', aliases=['u_net'])
-        class UNet(nn.Module):
-            def __init__(self, channels: int = 64) -> None:
-                super().__init__()
-
-        model = MODEL_REGISTRY.create('u_net', channels=32)
-        assert 'unet' in MODEL_REGISTRY
-        print(MODEL_REGISTRY)          # ModelRegistry(..., unet, ...)
-        print(MODEL_REGISTRY['unet'])  # <class 'UNet'>
+        model = MODEL_REGISTRY.create('graphnet', node_in_dim=11, edge_in_dim=3, out_dim=3)
+        assert 'graphnet' in MODEL_REGISTRY
+        print(MODEL_REGISTRY)              # ModelRegistry(..., graphnet, ...)
+        print(MODEL_REGISTRY['graphnet'])  # <class 'GraphNet'>
     """
 
     def __init__(self) -> None:
         self._registry: Dict[str, Type[nn.Module]] = {}
 
     # ------------------------------------------------------------------
-    # Internal helper
+    # Internal helper — only AutoRegisterModel should call this
     # ------------------------------------------------------------------
 
     def _register_key(
@@ -102,82 +91,9 @@ class ModelRegistry:
                 f"Use namespace= or aliases= to avoid conflicts, or "
                 f"allow_overwrite=True to suppress this warning.",
                 UserWarning,
-                stacklevel=4,
+                stacklevel=3,
             )
         self._registry[key] = cls
-
-    # ------------------------------------------------------------------
-    # Registration API
-    # ------------------------------------------------------------------
-
-    def add(
-        self,
-        cls: Type[nn.Module],
-        name: str,
-        namespace: Optional[str] = None,
-        allow_overwrite: bool = False,
-        aliases: Optional[List[str]] = None,
-    ) -> None:
-        """Register ``cls`` imperatively.
-
-        Args:
-            cls: The class to register.
-            name: Primary registration name (lowercased automatically).
-            namespace: Optional prefix; produces ``'<namespace>.<name>'``.
-            allow_overwrite: If ``True``, silently overwrite existing entries.
-            aliases: Extra names that resolve to the same class.
-        """
-        primary = name.lower()
-        if namespace:
-            primary = f"{namespace.lower()}.{primary}"
-        self._register_key(primary, cls, allow_overwrite)
-        for alias in (aliases or []):
-            alias_key = alias.lower()
-            if namespace:
-                alias_key = f"{namespace.lower()}.{alias_key}"
-            self._register_key(alias_key, cls, allow_overwrite)
-
-    def register(
-        self,
-        name: str,
-        namespace: Optional[str] = None,
-        allow_overwrite: bool = False,
-        aliases: Optional[List[str]] = None,
-    ) -> Callable[[Type[nn.Module]], Type[nn.Module]]:
-        """Decorator that registers an ``nn.Module`` subclass.
-
-        The class is returned unmodified, so normal usage after decoration
-        is unaffected.  No inheritance from :class:`AutoRegisterModel` is
-        required.
-
-        Example::
-
-            @MODEL_REGISTRY.register('resnet', namespace='vision', aliases=['res'])
-            class ResNet(nn.Module):
-                def __init__(self, layers: int = 50) -> None:
-                    super().__init__()
-
-            model = MODEL_REGISTRY.create('vision.res', layers=18)
-
-        Args:
-            name: Primary name to register under.
-            namespace: Optional namespace prefix.
-            allow_overwrite: If ``True``, suppress overwrite warnings.
-            aliases: Additional names that resolve to the same class.
-
-        Returns:
-            The original class, unmodified.
-        """
-        def decorator(cls: Type[nn.Module]) -> Type[nn.Module]:
-            self.add(
-                cls,
-                name=name,
-                namespace=namespace,
-                allow_overwrite=allow_overwrite,
-                aliases=aliases,
-            )
-            return cls
-        return decorator
 
     # ------------------------------------------------------------------
     # Lookup API
@@ -299,19 +215,24 @@ class ModelRegistry:
 # ---------------------------------------------------------------------------
 
 MODEL_REGISTRY = ModelRegistry()
-"""Module-level :class:`ModelRegistry` singleton.
+"""Module-level :class:`ModelRegistry` singleton — the shared name -> class
+store for the framework.
 
 The framework's built-in models (:class:`~gnn_pde_v2.models.GraphNet`,
 :class:`~gnn_pde_v2.models.MeshGraphNet`, :class:`~gnn_pde_v2.models.FNO`,
-etc.) are all registered here automatically when their modules are imported.
+:class:`~gnn_pde_v2.models.MultiscaleFNO`, etc.) register themselves here
+automatically when their modules are imported, because they subclass
+:class:`AutoRegisterModel`.
 
-Import and use directly for decorator-based or imperative registration::
+Models are added **only** by subclassing :class:`AutoRegisterModel`; this
+singleton exposes lookup / creation / introspection, not direct registration::
 
-    from gnn_pde_v2.core import MODEL_REGISTRY
 
-    @MODEL_REGISTRY.register('my_solver', aliases=['solver'])
-    class MySolver(nn.Module):
-        ...
+    from gnn_pde_v2.core import AutoRegisterModel, MODEL_REGISTRY
+
+    class MySolver(AutoRegisterModel, name='my_solver', aliases=['solver']):
+        def __init__(self) -> None:
+            super().__init__()
 
     model = MODEL_REGISTRY.create('solver')
 """
@@ -322,10 +243,12 @@ Import and use directly for decorator-based or imperative registration::
 # ---------------------------------------------------------------------------
 
 class AutoRegisterModel(BaseModel):
-    """Base class that auto-registers subclasses in :data:`MODEL_REGISTRY`.
+    """The single, canonical way to register a model.
 
-    Subclass and supply ``name=`` to register.  All class-method operations
-    delegate to :data:`MODEL_REGISTRY`, so both entry-points are always in sync::
+    Subclass and supply ``name=`` to register the class in
+    :data:`MODEL_REGISTRY` at class-definition (import) time. All
+    class-method operations delegate to :data:`MODEL_REGISTRY`, so the mixin
+    and the singleton are always in sync::
 
         class MyModel(AutoRegisterModel, name='my_model', aliases=['mymodel']):
             def __init__(self, dim: int = 128) -> None:
@@ -336,18 +259,16 @@ class AutoRegisterModel(BaseModel):
         m1 = AutoRegisterModel.create('my_model', dim=256)
         m2 = MODEL_REGISTRY.create('mymodel', dim=256)
 
-    .. tip::
-
-        For external or third-party classes that you cannot subclass, use the
-        :meth:`ModelRegistry.register` decorator on :data:`MODEL_REGISTRY`
-        directly instead.
+    To add a class that should **not** be registered (e.g. an internal building
+    block, or the :class:`~gnn_pde_v2.models.EncodeProcessDecode` combinator),
+    inherit from :class:`~gnn_pde_v2.core.BaseModel` (or plain ``nn.Module``)
+    instead — those classes never touch the registry.
 
     Args:
         name: Registration name.  Omitting this argument emits a
             :class:`UserWarning` and defaults to the lowercased class name.
-            Pass ``name=`` explicitly, or inherit from :class:`BaseModel`
-            directly if you do not want the class to be registered.
-        namespace: Optional namespace prefix.
+            Always pass ``name=`` for real models.
+        namespace: Optional namespace prefix (produces ``'<namespace>.<name>'``).
         allow_overwrite: If ``True``, suppress overwrite warnings.
         aliases: Additional names that resolve to this class.
     """
@@ -384,18 +305,19 @@ class AutoRegisterModel(BaseModel):
                 stacklevel=2,
             )
 
+        # Compute the primary registration key (lowercased, namespaced).
         reg_name = (name or cls.__name__).lower()
         if namespace:
             reg_name = f"{namespace.lower()}.{reg_name}"
         cls._model_name = reg_name
 
-        MODEL_REGISTRY.add(
-            cls,
-            name=(name or cls.__name__),
-            namespace=namespace,
-            allow_overwrite=allow_overwrite,
-            aliases=aliases,
-        )
+        # Register the primary name and every alias in the shared store.
+        MODEL_REGISTRY._register_key(reg_name, cls, allow_overwrite)
+        for alias in (aliases or []):
+            alias_key = alias.lower()
+            if namespace:
+                alias_key = f"{namespace.lower()}.{alias_key}"
+            MODEL_REGISTRY._register_key(alias_key, cls, allow_overwrite)
 
     # ------------------------------------------------------------------
     # Backwards-compatible class-method API — all delegate to MODEL_REGISTRY

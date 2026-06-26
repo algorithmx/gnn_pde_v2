@@ -1395,6 +1395,55 @@ class TestIntegration:
 
 
 # =============================================================================
+# TestMultiscaleFNORegistry - registration via AutoRegisterModel
+# =============================================================================
+
+class TestMultiscaleFNORegistry:
+    """MultiscaleFNO is now registered via AutoRegisterModel.
+
+    Previously (docs/investigation-report-model-base-class-and-registration.md
+    §3.4) ``MultiscaleFNO`` was a plain ``nn.Module`` with no registration and
+    was absent from ``_LAZY_MODELS``. It now subclasses ``AutoRegisterModel``
+    and is reachable both through the registry and the lazy export.
+    """
+
+    def test_model_registry(self):
+        """MultiscaleFNO and its aliases are registered after import."""
+        from gnn_pde_v2.core.registry import MODEL_REGISTRY
+
+        assert 'multiscalefno' in MODEL_REGISTRY
+        assert 'multiscale_fno' in MODEL_REGISTRY
+        assert 'msfno' in MODEL_REGISTRY
+
+    def test_registry_lookup_returns_same_class(self):
+        from gnn_pde_v2.core.registry import MODEL_REGISTRY
+
+        assert MODEL_REGISTRY['multiscalefno'] is MultiscaleFNO
+
+    def test_is_base_model(self):
+        """MultiscaleFNO inherits from AutoRegisterModel, so it is a BaseModel."""
+        from gnn_pde_v2.core import BaseModel
+
+        model = MultiscaleFNO(
+            in_channels=1,
+            out_channels=1,
+            width=32,
+            modes=[16, 16],
+            n_layers=2,
+            n_dim=2,
+            architecture="ufno",
+        )
+        assert isinstance(model, BaseModel)
+
+    def test_lazy_export(self):
+        """MultiscaleFNO is reachable via the lazy loader."""
+        from gnn_pde_v2 import models
+
+        assert models.MultiscaleFNO is MultiscaleFNO
+        assert 'MultiscaleFNO' in models.__all__
+
+
+# =============================================================================
 # Fixtures
 # =============================================================================
 
