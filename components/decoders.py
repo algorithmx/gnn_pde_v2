@@ -68,7 +68,7 @@ class IndependentMLPDecoder(nn.Module):
 
     :meth:`forward` concatenates all component outputs along the feature
     dimension and returns a single ``[N, sum(out_dims)]`` tensor, satisfying
-    the :class:`~gnn_pde_v2.core.protocols.Decoder` protocol directly.
+    the :class:`~gnn_pde_v2.core.protocols.NodeDecoder` protocol directly.
 
     Args:
         latent_dim: Input feature dimension
@@ -112,7 +112,7 @@ class IndependentMLPDecoder(nn.Module):
         Decode to a single concatenated output tensor.
 
         Concatenates all component outputs along the feature dimension.
-        Use this to satisfy the :class:`~gnn_pde_v2.core.protocols.Decoder`
+        Use this to satisfy the :class:`~gnn_pde_v2.core.protocols.NodeDecoder`
         protocol which expects a single Tensor.
 
         Args:

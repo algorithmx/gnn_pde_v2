@@ -119,10 +119,13 @@ output = model(graph)  # [10, 2]
 | `GraphProcessor` | Protocol for processor modules (GraphsTuple → GraphsTuple) |
 | `NodeDecoder` | Protocol for node decoders |
 | `QueryDecoder` | Protocol for query-based decoders |
-| `Decoder` | Union of NodeDecoder and QueryDecoder |
-| `GridProcessor` | Protocol for grid processors (Tensor → Tensor) |
-| `GridModel` | Protocol for grid-to-grid models |
-| `PositionEncoder` | Protocol for position encoders |
+| `GraphModel` | Protocol for end-to-end graph models |
+
+> **Note:** The graph-world protocols above are static-typing hints only (not
+> `runtime_checkable`). Runtime dispatch uses explicit discriminators (e.g. the
+> `is_query_decoder` class attribute). The grid-world protocols
+> (`PositionEncoder`/`GridProcessor`/`GridModel`) and the `Decoder` Union were
+> removed — see `docs/remediation-plan-issue4-structural-protocols.md`.
 | `ConditioningProtocol` | ABC for conditioning mechanisms |
 | `Modulation` | Dataclass for modulation parameters (shift, scale, gate, cross_kv) |
 

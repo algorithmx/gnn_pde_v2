@@ -1,56 +1,45 @@
 """
 Structural protocols for the GNN-PDE framework.
 
-These protocols define the interfaces that components must implement.
-Using ``typing.Protocol`` allows structural (duck-type) checking without
-requiring inheritance, making the system open for extension.
+These protocols define the interfaces that components implement.  Using
+``typing.Protocol`` allows structural (duck-type) checking by static type
+checkers (mypy / pyright) without requiring inheritance, making the system open
+for extension.
 
 All graph-world protocols work with :class:`~gnn_pde_v2.core.GraphsTuple`.
-All grid-world protocols work with plain :class:`torch.Tensor`.
 
-Protocols are ``runtime_checkable``, so ``isinstance(obj, GraphProcessor)``
-works at runtime in addition to static type checking::
+Two tiers of protocol live here:
 
-    from gnn_pde_v2.core.protocols import GraphProcessor
-    assert isinstance(my_processor, GraphProcessor)  # True if forward matches
+**Stage protocols** (``GraphEncoder``, ``GraphProcessor``, ``NodeDecoder``,
+``QueryDecoder``, ``GraphModel``) describe the *role* a module plays in the
+:class:`~gnn_pde_v2.models.EncodeProcessDecode` pipeline.  They are **plain
+``Protocol`` classes and deliberately NOT ``runtime_checkable``**: because
+``@runtime_checkable`` only verifies that a method *name* exists (it cannot
+inspect signatures, return types, or distinguish ``GraphsTuple`` from
+``Tensor``), every ``nn.Module`` would satisfy every single-method stage
+protocol — even ``nn.ReLU()``.  Such "runtime checks" carried no enforceable
+contract and were removed (see ``docs/remediation-plan-issue4-structural-protocols.md``).
+Use these protocols as **static-typing hints only**.  Code that needs to branch
+on a component's role at runtime must use an explicit discriminator — for
+example :class:`~gnn_pde_v2.models.EncodeProcessDecode` dispatches on the
+decoder's ``is_query_decoder`` class attribute, not on ``isinstance``.
 
-.. warning:: Runtime-checking limitations
-
-    ``@runtime_checkable`` only verifies that the named **methods exist**;
-    it does **not** inspect signatures, return types, or the types of
-    declared data/property members (see the CPython docs for
-    ``typing.runtime_checkable``).  Because every ``nn.Module`` defines a
-    ``forward`` method, **every** ``nn.Module`` satisfies every single-method
-    protocol in this file.  Concretely:
-
-    - ``GraphEncoder``, ``GraphProcessor``, ``NodeDecoder`` and ``GraphModel``
-      are **indistinguishable** at runtime — ``isinstance`` cannot tell a
-      decoder apart from an encoder.  The same applies to the grid-world
-      ``PositionEncoder`` / ``GridProcessor`` / ``GridModel`` trio (even
-      ``nn.ReLU()`` satisfies all three).
-    - The "stage" a module occupies in a pipeline (encode vs. process vs.
-      decode) is a *positional* fact about where it is wired, not a
-      *structural* property these protocols can carry.
-
-    Therefore these protocols are useful as **documentation and static-typing
-    hints**, but must **not** be used as runtime discriminators.  Code that
-    needs to branch on a component's role must use an explicit discriminator
-    (e.g. ``EncodeProcessDecode`` dispatches on the decoder's
-    ``is_query_decoder`` class attribute, not on ``isinstance``).  For data /
-    property members (``EdgeMessageProcessor.weight_out_dim``,
-    ``NodeUpdateStrategy.latent_dim``) the real contract is enforced by the
-    validators in :mod:`gnn_pde_v2.components.processor_validators`, which the
-    consuming blocks call at construction time.
+**Component contracts** (``EdgeMessageProcessor``, ``NodeUpdateStrategy``,
+``EdgeFeatureAssembler``) declare data/property members in addition to
+``forward`` and remain ``@runtime_checkable``.  Their real runtime enforcement,
+however, comes from the construction-time validators in
+:mod:`gnn_pde_v2.components.processor_validators` (which check ``nn.Module``
+membership and ``latent_dim`` type/value), not from ``isinstance`` alone.
 
 Conditioning primitives (``Modulation``, ``ConditioningProtocol``) are
-**nominal** ABCs, not structural protocols.  They now live in
+**nominal** ABCs, not structural protocols.  They live in
 :mod:`gnn_pde_v2.core.conditioning` and are merely re-exported here for
-backwards compatibility (see ``docs/protocol_issues_2026_06.md`` §5).
+backwards compatibility.
 """
 
 from __future__ import annotations
 
-from typing import Optional, Protocol, Union, runtime_checkable
+from typing import Optional, Protocol, runtime_checkable
 
 from torch import Tensor
 
@@ -67,44 +56,34 @@ from .conditioning import CondT, ConditioningProtocol, Modulation  # noqa: F401
 
 
 # ---------------------------------------------------------------------------
-# Graph-world protocols
+# Graph-world stage protocols.
+#
+# These are plain ``Protocol`` classes (NOT ``runtime_checkable``).  They serve
+# as static-typing hints for :class:`~gnn_pde_v2.models.EncodeProcessDecode`.
+# Runtime dispatch on a component's role must use explicit discriminators
+# (e.g. the ``is_query_decoder`` class attribute), never ``isinstance``.
 # ---------------------------------------------------------------------------
 
-@runtime_checkable
 class GraphEncoder(Protocol):
     """Protocol for modules that encode a raw graph into a latent graph.
 
     Satisfied by any module whose ``forward`` maps
-    ``GraphsTuple → GraphsTuple``.
-
-    .. warning::
-
-        This protocol is structurally identical to :class:`GraphProcessor`,
-        :class:`NodeDecoder` and :class:`GraphModel` at runtime — see the
-        module docstring.  Use it as a static-typing hint only, never as an
-        ``isinstance`` discriminator.
+    ``GraphsTuple → GraphsTuple``.  Static-typing hint only; not
+    ``runtime_checkable``.
     """
 
     def forward(self, graph: GraphsTuple) -> GraphsTuple: ...
 
 
-
-@runtime_checkable
 class GraphProcessor(Protocol):
     """Protocol for modules that evolve a latent graph representation.
 
     Any module whose ``forward`` maps ``GraphsTuple → GraphsTuple`` satisfies
-    this protocol, including :class:`~gnn_pde_v2.components.GraphNetProcessor`,
+    this protocol at the type-checker level, including
+    :class:`~gnn_pde_v2.components.GraphNetProcessor`,
     :class:`~gnn_pde_v2.components.TransformerProcessor`, and custom blocks,
-    without any inheritance required.
-
-    Example::
-
-        from gnn_pde_v2.core.protocols import GraphProcessor
-        from gnn_pde_v2.components import GraphNetProcessor
-
-        proc: GraphProcessor = GraphNetProcessor(latent_dim=128, n_layers=6)
-        assert isinstance(proc, GraphProcessor)  # True at runtime
+    without any inheritance required.  Static-typing hint only; not
+    ``runtime_checkable``.
     """
 
     def forward(self, graph: GraphsTuple) -> GraphsTuple: ...
@@ -174,14 +153,6 @@ class EdgeFeatureAssembler(Protocol):
     The protocol requires:
     - An :attr:`out_dim` property returning the output feature dimension
     - A ``forward(graph: GraphsTuple) -> Tensor`` method that assembles edge features
-
-    Example::
-
-        from gnn_pde_v2.core.protocols import EdgeFeatureAssembler
-        from gnn_pde_v2.components import NodeDifferenceAssembler
-
-        assembler: EdgeFeatureAssembler = NodeDifferenceAssembler(128)
-        assert isinstance(assembler, EdgeFeatureAssembler)  # True at runtime
     """
 
     @property
@@ -190,7 +161,6 @@ class EdgeFeatureAssembler(Protocol):
     def forward(self, graph: GraphsTuple) -> Tensor: ...
 
 
-@runtime_checkable
 class NodeDecoder(Protocol):
     """Protocol for decoders that output at fixed node positions.
 
@@ -199,22 +169,14 @@ class NodeDecoder(Protocol):
 
     Implementations set ``is_query_decoder = False`` (the default) so that
     :class:`~gnn_pde_v2.models.EncodeProcessDecode` never forwards
-    ``query_positions`` to them.  Note that ``@runtime_checkable`` cannot
-    distinguish this protocol from :class:`QueryDecoder` or even
-    :class:`GraphEncoder` at runtime (see the module docstring); it is a
-    static-typing hint only.
-
-    Example::
-
-        from gnn_pde_v2.components import MLPDecoder
-
-        assert MLPDecoder(128, 3).is_query_decoder is False
+    ``query_positions`` to them.  Static-typing hint only; not
+    ``runtime_checkable`` — runtime dispatch uses the ``is_query_decoder``
+    class attribute.
     """
 
     def forward(self, graph: GraphsTuple) -> Tensor: ...
 
 
-@runtime_checkable
 class QueryDecoder(Protocol):
     """Protocol for decoders that output at arbitrary query positions.
 
@@ -226,15 +188,9 @@ class QueryDecoder(Protocol):
 
     Implementations must set the class attribute ``is_query_decoder = True`` so
     that :class:`~gnn_pde_v2.models.EncodeProcessDecode` forwards
-    ``query_positions`` to them (``@runtime_checkable`` cannot distinguish this
-    protocol from :class:`NodeDecoder` — see the module docstring).
-
-    Example::
-
-        from gnn_pde_v2.core.protocols import QueryDecoder
-        from gnn_pde_v2.components import ProbeDecoder
-
-        assert ProbeDecoder(128, out_dim=3).is_query_decoder is True
+    ``query_positions`` to them.  Static-typing hint only; not
+    ``runtime_checkable`` — runtime dispatch uses the ``is_query_decoder``
+    class attribute.
     """
 
     is_query_decoder: bool
@@ -248,78 +204,16 @@ class QueryDecoder(Protocol):
     ) -> Tensor: ...
 
 
-# Backwards-compatible type alias.
-#
-# .. deprecated::
-#     ``Decoder`` is a ``Union`` of two ``@runtime_checkable`` protocols, which
-#     means ``isinstance(x, Decoder)`` degrades to "has a ``forward`` method"
-#     and is therefore useless as a runtime discriminator (see
-#     ``docs/protocol_issues_2026_06.md`` §4).  It is retained only so that
-#     existing imports keep working.  New code should annotate decoders with
-#     ``NodeDecoder`` or ``QueryDecoder`` explicitly and dispatch on the
-#     ``is_query_decoder`` class attribute, the way ``EncodeProcessDecode``
-#     does.
-Decoder = Union[NodeDecoder, QueryDecoder]
-
-
-@runtime_checkable
 class GraphModel(Protocol):
     """Protocol for end-to-end models that map a graph to a tensor.
 
     Satisfied by :class:`~gnn_pde_v2.models.GraphNet`,
     :class:`~gnn_pde_v2.models.MeshGraphNet`, and any custom model whose
     ``forward`` accepts a :class:`~gnn_pde_v2.core.GraphsTuple`.
+    Static-typing hint only; not ``runtime_checkable``.
     """
 
     def forward(self, graph: GraphsTuple) -> Tensor: ...
-
-
-# ---------------------------------------------------------------------------
-# Grid-world protocols
-#
-# .. warning::
-#     As with the graph-world protocols, these three are structurally
-#     identical at runtime: every ``Tensor -> Tensor`` ``nn.Module`` (even
-#     ``nn.ReLU()``) satisfies all of ``PositionEncoder``, ``GridProcessor``
-#     and ``GridModel``.  Treat them as static-typing / documentation hints,
-#     not as ``isinstance`` discriminators.
-# ---------------------------------------------------------------------------
-
-@runtime_checkable
-class PositionEncoder(Protocol):
-    """Protocol for modules that encode raw coordinates into feature vectors.
-
-    Satisfied by :class:`~gnn_pde_v2.components.FourierFeatureEncoder` and
-    any linear projection that maps ``[..., spatial_dim] → [..., feat_dim]``.
-    """
-
-    def forward(self, x: Tensor) -> Tensor: ...
-
-
-@runtime_checkable
-class GridProcessor(Protocol):
-    """Protocol for modules that process regular grid/tensor representations.
-
-    Satisfied by spectral layers
-    (:class:`~gnn_pde_v2.components.FNOBlock`,
-    :class:`~gnn_pde_v2.components.AFNOBlock`), the full
-    :class:`~gnn_pde_v2.models.FNO` model, and any ``Tensor → Tensor``
-    transformation.
-    """
-
-    def forward(self, x: Tensor) -> Tensor: ...
-
-
-@runtime_checkable
-class GridModel(Protocol):
-    """Protocol for end-to-end grid-to-grid models.
-
-    Satisfied by :class:`~gnn_pde_v2.models.FNO`,
-    :class:`~gnn_pde_v2.models.TFNO`, :class:`~gnn_pde_v2.models.AFNO`,
-    and any ``Tensor → Tensor`` model.
-    """
-
-    def forward(self, x: Tensor) -> Tensor: ...
 
 
 __all__ = [
@@ -327,18 +221,14 @@ __all__ = [
     "CondT",
     "Modulation",
     "ConditioningProtocol",
-    # Graph-world
+    # Graph-world stage protocols (static-typing hints, NOT runtime_checkable)
     "GraphEncoder",
     "GraphProcessor",
+    "NodeDecoder",
+    "QueryDecoder",
+    "GraphModel",
+    # Component contracts (runtime_checkable; enforced by validators)
     "EdgeMessageProcessor",
     "NodeUpdateStrategy",
     "EdgeFeatureAssembler",
-    "NodeDecoder",
-    "QueryDecoder",
-    "Decoder",  # Backwards-compatible alias (deprecated)
-    "GraphModel",
-    # Grid-world
-    "PositionEncoder",
-    "GridProcessor",
-    "GridModel",
 ]

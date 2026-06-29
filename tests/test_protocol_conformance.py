@@ -204,3 +204,66 @@ class TestNodeUpdaterValidation:
 
         with pytest.raises(ValueError, match="positive int"):
             validate_node_update_strategy(_BadUpdater(), 16)
+
+
+# ---------------------------------------------------------------------------
+# Issue #4: structural stage protocols are NOT runtime_checkable.
+# They carried no enforceable contract (signatures are unchecked) and were
+# decorative. Component-contract protocols (EdgeMessageProcessor etc.) remain
+# runtime_checkable. The real graph-stage dispatch uses is_query_decoder.
+# ---------------------------------------------------------------------------
+
+class TestProtocolsNotRuntimeCheckable:
+    """Lock in the issue #4 remediation so it cannot silently regress."""
+
+    @pytest.mark.parametrize(
+        "name",
+        [
+            "GraphEncoder",
+            "GraphProcessor",
+            "NodeDecoder",
+            "QueryDecoder",
+            "GraphModel",
+        ],
+    )
+    def test_graph_stage_protocols_not_runtime_checkable(self, name):
+        from gnn_pde_v2.core import protocols
+
+        proto = getattr(protocols, name)
+        with pytest.raises(TypeError, match="runtime_checkable"):
+            isinstance(object(), proto)
+
+    @pytest.mark.parametrize(
+        "name",
+        ["EdgeMessageProcessor", "NodeUpdateStrategy", "EdgeFeatureAssembler"],
+    )
+    def test_component_protocols_still_runtime_checkable(self, name):
+        from gnn_pde_v2.core import protocols
+
+        proto = getattr(protocols, name)
+        assert hasattr(proto, "_is_protocol"), f"{name} should still be a Protocol"
+        isinstance(object(), proto)
+        assert name in protocols.__all__
+
+    def test_decoder_union_removed(self):
+        from gnn_pde_v2.core import protocols
+
+        assert not hasattr(protocols, "Decoder")
+
+    def test_grid_trio_removed(self):
+        from gnn_pde_v2.core import protocols
+
+        for name in ("PositionEncoder", "GridProcessor", "GridModel"):
+            assert not hasattr(protocols, name), f"{name} should be deleted"
+
+    def test_removed_names_absent_from_core_all(self):
+        from gnn_pde_v2 import core
+
+        for name in ("Decoder", "PositionEncoder", "GridProcessor", "GridModel"):
+            assert name not in core.__all__, f"{name} should not be exported"
+
+    def test_removed_names_absent_from_components_all(self):
+        from gnn_pde_v2 import components
+
+        for name in ("Decoder", "PositionEncoder", "GridProcessor", "GridModel"):
+            assert name not in components.__all__, f"{name} should not be exported"

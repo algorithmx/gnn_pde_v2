@@ -22,8 +22,8 @@ class FourierFeatureEncoder(nn.Module):
     Functions in Low Dimensional Domains" (NeurIPS 2020)
 
     Protocol conformance:
-        - ``forward(Tensor) -> Tensor`` makes this a
-          :class:`~gnn_pde_v2.core.protocols.PositionEncoder`.
+        - ``forward(Tensor) -> Tensor`` matches the ``Tensor -> Tensor``
+          position-encoder contract used by grid models.
         - :meth:`encode_graph` (``GraphsTuple -> GraphsTuple``) is provided for
           graph-level use but is **deliberately not** named ``forward``, so this
           class does **not** satisfy

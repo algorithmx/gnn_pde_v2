@@ -5,6 +5,42 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Remove Decorative Structural Protocols (Issue #4)
+
+Resolved the unenforceable graph/grid protocol layer tracked in
+`docs/architecture_issues.md` §4. The `@runtime_checkable` stage protocols
+carried no contract (`isinstance` only checked method existence, so `nn.ReLU()`
+satisfied every grid protocol and no decoder could be distinguished from an
+encoder at runtime).
+
+**Changed:**
+- `GraphEncoder`, `GraphProcessor`, `NodeDecoder`, `QueryDecoder`, and
+  `GraphModel` are now plain `Protocol` classes (no longer
+  `@runtime_checkable`). They retain full static-typing value (mypy/pyright)
+  but no longer advertise a false runtime-enforcement promise.
+- Runtime dispatch in `EncodeProcessDecode.forward` is unchanged — it already
+  used the `is_query_decoder` class attribute, not `isinstance`.
+
+**Removed:**
+- `PositionEncoder`, `GridProcessor`, `GridModel` — the orphaned grid trio
+  (zero production imports, zero test references, no grid model used them).
+- `Decoder = Union[NodeDecoder, QueryDecoder]` — already deprecated; `isinstance`
+  against it was true for any `nn.Module`.
+
+**Migration:**
+- If you imported `Decoder`, `PositionEncoder`, `GridProcessor`, or `GridModel`
+  from `gnn_pde_v2.core` or `gnn_pde_v2.components`, remove the import — these
+  names no longer exist. Use `Union[NodeDecoder, QueryDecoder]` inline if you
+  need the decoder union type.
+- If you relied on `isinstance(x, GraphEncoder)` etc., switch to an explicit
+  discriminator (the codebase already used `is_query_decoder` for this).
+
+**Tests:**
+- `tests/test_protocol_conformance.py::TestProtocolsNotRuntimeCheckable` (12
+  new tests) guards the remediation.
+
 ## [2.9.7] - 2026-06-26
 
 ### Unify Model Base-Class & Registration

@@ -317,9 +317,8 @@ discriminator instead (e.g. `EncodeProcessDecode` dispatches on the decoder's
 
 ```python
 from gnn_pde_v2.core.protocols import (
-    GraphEncoder, GraphProcessor, NodeDecoder, QueryDecoder, Decoder,
-    GraphModel, PositionEncoder, GridProcessor, GridModel,
-    NodeUpdateStrategy, EdgeMessageProcessor, EdgeFeatureAssembler,
+    GraphEncoder, GraphProcessor, NodeDecoder, QueryDecoder,
+    GraphModel, NodeUpdateStrategy, EdgeMessageProcessor, EdgeFeatureAssembler,
 )
 ```
 
@@ -535,8 +534,7 @@ from gnn_pde_v2.core import (
     Modulation, ConditioningProtocol,
     # Protocols (structural)
     GraphEncoder, GraphProcessor, NodeUpdateStrategy,
-    NodeDecoder, QueryDecoder, Decoder, GraphModel,
-    PositionEncoder, GridProcessor, GridModel,
+    NodeDecoder, QueryDecoder, GraphModel,
 )
 ```
 
@@ -590,8 +588,7 @@ from gnn_pde_v2.components import (
     LearnableRBFEncoder, GaussianRBFEncoder,
     # Protocols (re-exported)
     GraphEncoder, GraphProcessor, EdgeMessageProcessor,
-    NodeDecoder, QueryDecoder, Decoder, GraphModel,
-    PositionEncoder, GridProcessor, GridModel,
+    NodeDecoder, QueryDecoder, GraphModel,
 )
 
 # Multiscale — import explicitly from the subpackage:
