@@ -73,6 +73,13 @@ class EdgeFeatureAssembler(nn.Module, ABC):
                 return torch.cat([v_i, v_j], dim=-1)
     """
 
+    @classmethod
+    def __subclasshook__(cls, candidate):
+        if cls is EdgeFeatureAssembler:
+            if all(hasattr(candidate, attr) for attr in ("out_dim", "forward")):
+                return True
+        return NotImplemented
+
     @property
     @abstractmethod
     def out_dim(self) -> int:

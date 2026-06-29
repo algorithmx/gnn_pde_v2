@@ -9,9 +9,9 @@ from ..core.graph import GraphsTuple
 from ..core.functional import aggregate_edges, broadcast_global, aggregate_to_global
 from ..core.mlp import MLP
 from ..core.aggregation import Aggregation, Sum, get_aggregation
-from ..core.protocols import EdgeMessageProcessor
 
 __all__ = [
+    "EdgeMessageProcessor",
     "FullEdgeMessageProcessor",
     "VectorEdgeMessageProcessor",
     "ScalarEdgeMessageProcessor",
@@ -19,9 +19,26 @@ __all__ = [
     "_default_edge_message_processor",
 ]
 
-#
-class _EdgeMessageProcessorBase(nn.Module, ABC):
-    """Base class for compile-friendly edge-message processors."""
+
+class EdgeMessageProcessor(nn.Module, ABC):
+    """Abstract base for compile-friendly edge-message processors.
+
+    This abstract base is the single contract for edge-message processors:
+    concrete processors subclass it, instantiation fails unless
+    ``weight_out_dim`` and ``forward`` are implemented, and the
+    construction-time validator ``validate_edge_message_processor`` checks
+    membership via ``isinstance(p, EdgeMessageProcessor)``.  A
+    ``__subclasshook__`` keeps the contract open for extension: any
+    ``nn.Module`` exposing ``weight_out_dim`` and ``forward`` passes
+    ``isinstance`` without explicit inheritance.
+    """
+
+    @classmethod
+    def __subclasshook__(cls, candidate):
+        if cls is EdgeMessageProcessor:
+            if all(hasattr(candidate, attr) for attr in ("weight_out_dim", "forward")):
+                return True
+        return NotImplemented
 
     def __init__(self, latent_dim: int):
         super().__init__()
@@ -67,7 +84,7 @@ class _EdgeMessageProcessorBase(nn.Module, ABC):
             )
 
 
-class FullEdgeMessageProcessor(_EdgeMessageProcessorBase):
+class FullEdgeMessageProcessor(EdgeMessageProcessor):
     """Applies a full per-edge ``[H, H]`` weight matrix.
 
     This is the most expressive built-in processor. The edge weight network
@@ -86,7 +103,7 @@ class FullEdgeMessageProcessor(_EdgeMessageProcessorBase):
         return torch.bmm(src_x.unsqueeze(1), W).squeeze(1)
 
 
-class VectorEdgeMessageProcessor(_EdgeMessageProcessorBase):
+class VectorEdgeMessageProcessor(EdgeMessageProcessor):
     """Applies per-channel vector gating ``src_x * w``.
 
     The edge weight network emits one weight per latent channel, producing a
@@ -102,7 +119,7 @@ class VectorEdgeMessageProcessor(_EdgeMessageProcessorBase):
         return src_x * edge_weights
 
 
-class ScalarEdgeMessageProcessor(_EdgeMessageProcessorBase):
+class ScalarEdgeMessageProcessor(EdgeMessageProcessor):
     """Applies scalar gating with broadcast over channels.
 
     The edge weight network emits a single scalar per edge, which is
@@ -118,7 +135,7 @@ class ScalarEdgeMessageProcessor(_EdgeMessageProcessorBase):
         return src_x * edge_weights
 
 
-class LowRankEdgeMessageProcessor(_EdgeMessageProcessorBase):
+class LowRankEdgeMessageProcessor(EdgeMessageProcessor):
     """Applies symmetric low-rank message transforms ``U U^T x``.
 
     Instead of materializing a full ``[H, H]`` matrix per edge, this processor

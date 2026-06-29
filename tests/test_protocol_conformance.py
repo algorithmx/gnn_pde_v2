@@ -12,6 +12,7 @@ These tests lock in the behaviour described in
   processors actually reject malformed components (§6).
 """
 
+import collections.abc
 import inspect
 
 import pytest
@@ -159,9 +160,11 @@ class TestConditioningRelocation:
         assert CanonCond is CompatCond
         assert CanonMod is CompatMod
 
-    def test_node_update_strategy_exported_from_protocols_all(self):
+    def test_node_update_strategy_no_longer_a_protocol(self):
+        """Issue #3: NodeUpdateStrategy is now an ABC in components, not a protocol."""
         from gnn_pde_v2.core import protocols
-        assert "NodeUpdateStrategy" in protocols.__all__
+        assert "NodeUpdateStrategy" not in protocols.__all__
+        assert not hasattr(protocols, "NodeUpdateStrategy")
 
 
 # ---------------------------------------------------------------------------
@@ -209,8 +212,10 @@ class TestNodeUpdaterValidation:
 # ---------------------------------------------------------------------------
 # Issue #4: structural stage protocols are NOT runtime_checkable.
 # They carried no enforceable contract (signatures are unchecked) and were
-# decorative. Component-contract protocols (EdgeMessageProcessor etc.) remain
-# runtime_checkable. The real graph-stage dispatch uses is_query_decoder.
+# decorative. Issue #3: component-contract types (EdgeMessageProcessor,
+# NodeUpdateStrategy, EdgeFeatureAssembler) are now plain ABCs in
+# gnn_pde_v2.components — a single mechanism per concept. The real graph-stage
+# dispatch uses is_query_decoder.
 # ---------------------------------------------------------------------------
 
 class TestProtocolsNotRuntimeCheckable:
@@ -223,27 +228,39 @@ class TestProtocolsNotRuntimeCheckable:
             "GraphProcessor",
             "NodeDecoder",
             "QueryDecoder",
-            "GraphModel",
         ],
     )
-    def test_graph_stage_protocols_not_runtime_checkable(self, name):
+    def test_graph_stage_hints_are_callable_aliases(self, name):
+        """Issue #3 option 2: stage hints are plain Callable aliases, not protocols."""
+        import typing
         from gnn_pde_v2.core import protocols
 
-        proto = getattr(protocols, name)
-        with pytest.raises(TypeError, match="runtime_checkable"):
-            isinstance(object(), proto)
+        alias = getattr(protocols, name)
+        assert typing.get_origin(alias) is collections.abc.Callable
+        assert not hasattr(alias, "_is_protocol")
+
+    def test_graph_model_removed(self):
+        from gnn_pde_v2.core import protocols
+
+        assert not hasattr(protocols, "GraphModel")
+        assert "GraphModel" not in protocols.__all__
 
     @pytest.mark.parametrize(
         "name",
         ["EdgeMessageProcessor", "NodeUpdateStrategy", "EdgeFeatureAssembler"],
     )
-    def test_component_protocols_still_runtime_checkable(self, name):
+    def test_component_contracts_are_single_abc(self, name):
+        """Issue #3: each contract is a single ABC in components, not a protocol."""
+        import abc
+        from gnn_pde_v2 import components
         from gnn_pde_v2.core import protocols
 
-        proto = getattr(protocols, name)
-        assert hasattr(proto, "_is_protocol"), f"{name} should still be a Protocol"
-        isinstance(object(), proto)
-        assert name in protocols.__all__
+        contract = getattr(components, name)
+        assert isinstance(contract, abc.ABCMeta), f"{name} should be an ABC"
+        assert not hasattr(contract, "_is_protocol"), f"{name} must not be a Protocol"
+        assert name in components.__all__
+        # The colliding protocol must no longer exist in core.protocols.
+        assert not hasattr(protocols, name), f"{name} protocol must be removed"
 
     def test_decoder_union_removed(self):
         from gnn_pde_v2.core import protocols

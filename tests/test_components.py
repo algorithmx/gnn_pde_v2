@@ -34,7 +34,7 @@ from gnn_pde_v2.components import (
     LearnableRBFEncoder,
     MultiHeadAttention, TransformerBlock, TransformerProcessor,
 )
-from gnn_pde_v2.core.protocols import EdgeMessageProcessor
+from gnn_pde_v2.components import EdgeMessageProcessor
 
 
 class TestMLP:
@@ -517,8 +517,9 @@ class TestEdgeConditionedConvBlock:
         assert out.nodes.shape == (5, 16)
 
     def test_edge_message_processor_protocol_is_runtime_checkable(self):
-        """Built-in processors should satisfy the EdgeMessageProcessor protocol."""
-        assert hasattr(EdgeMessageProcessor, '_is_protocol')
+        """Built-in processors should subclass the EdgeMessageProcessor ABC."""
+        import abc
+        assert isinstance(EdgeMessageProcessor, abc.ABCMeta)
         assert isinstance(FullEdgeMessageProcessor(8), EdgeMessageProcessor)
         assert isinstance(VectorEdgeMessageProcessor(8), EdgeMessageProcessor)
         assert isinstance(ScalarEdgeMessageProcessor(8), EdgeMessageProcessor)

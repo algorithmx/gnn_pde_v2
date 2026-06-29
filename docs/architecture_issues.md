@@ -38,7 +38,23 @@ The architecture is presented as Encode-Process-Decode, and the decoder protocol
 
 ---
 
-### 3. Dual extension mechanism (Protocol + ABC) with a real name collision
+### 3. Dual extension mechanism (Protocol + ABC) with a real name collision (resolved)
+
+> **RESOLVED (2026-06-29).** Each of the three pluggable component contracts now
+> has exactly one mechanism: a single public ABC living next to its concrete
+> implementations in `components/`. The colliding/redundant `typing.Protocol`
+> twins were deleted from `core/protocols.py`. `_EdgeMessageProcessorBase` →
+> public `EdgeMessageProcessor` (`components/edge_processors.py`),
+> `_NodeUpdaterBase` → public `NodeUpdateStrategy` (`components/node_updaters.py`),
+> and `EdgeFeatureAssembler` remains the public ABC (`components/edge_assemblers.py`).
+> Each ABC carries a `__subclasshook__` so duck-typed `nn.Module`s still pass
+> `isinstance` (open for extension without inheritance). Validators
+> (`processor_validators.py`), `core/__init__.py`, `components/__init__.py`, and
+> `processors.py` import the single name; `core.protocols.__all__` no longer
+> lists them. Guarded by `tests/test_protocol_conformance.py::TestProtocolsNotRuntimeCheckable::test_component_contracts_are_single_abc`.
+> 448 tests pass (3 pre-existing unrelated failures).
+
+**Historical (pre-fix) record below — no longer reflects the code:**
 
 Three pluggable extension points each have **both** a `typing.Protocol` (in `core/protocols.py`) **and** an abstract base class (`nn.Module, ABC` in `components/`). Every concrete class inherits from the ABC, so the Protocol is structurally redundant — it adds no runtime constraint beyond what the ABC already enforces.
 

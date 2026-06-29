@@ -10,7 +10,8 @@ from typing import Optional
 import torch
 import torch.nn as nn
 
-from ..core.protocols import EdgeMessageProcessor, NodeUpdateStrategy
+from .edge_processors import EdgeMessageProcessor
+from .node_updaters import NodeUpdateStrategy
 
 
 __all__ = [
@@ -58,9 +59,9 @@ def validate_node_update_strategy(
 ) -> None:
     """Validate an injected node-update strategy against block expectations.
 
-    ``@runtime_checkable`` cannot verify the ``latent_dim`` attribute's type or
-    value, nor that the strategy is an ``nn.Module``; this helper closes that
-    gap at construction time (see ``docs/protocol_issues_2026_06.md`` §6).
+    The ``NodeUpdateStrategy`` ABC guarantees ``forward`` and a positive
+    ``latent_dim`` via inheritance; this helper additionally checks that the
+    instance's ``latent_dim`` matches the block at construction time.
     """
     if not isinstance(node_updater, nn.Module):
         raise TypeError(

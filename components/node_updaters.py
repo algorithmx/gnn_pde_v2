@@ -42,7 +42,6 @@ import torch
 import torch.nn as nn
 
 from ..core.mlp import MLP
-from ..core.protocols import NodeUpdateStrategy
 
 from typing import Callable
 
@@ -51,6 +50,8 @@ from typing import Callable
 NodeUpdaterFactory = Callable[[], nn.Module]
 
 __all__ = [
+    # Strategy base (the single contract for node updaters)
+    "NodeUpdateStrategy",
     # Node updater classes
     "ConcatMLPNodeUpdater",
     "RootWeightNodeUpdater",
@@ -72,8 +73,24 @@ __all__ = [
     "_default_node_updater",
 ]
 
-class _NodeUpdaterBase(nn.Module, ABC):
-    """Base class for compile-friendly node-update strategies."""
+class NodeUpdateStrategy(nn.Module, ABC):
+    """Abstract base for compile-friendly node-update strategies.
+
+    This abstract base is the single contract for node-update strategies:
+    concrete updaters subclass it, instantiation fails unless ``forward`` is
+    implemented, and the construction-time validator
+    ``validate_node_update_strategy`` checks membership via
+    ``isinstance(u, NodeUpdateStrategy)``.  A ``__subclasshook__`` keeps the
+    contract open for extension: any ``nn.Module`` exposing ``latent_dim`` and
+    ``forward`` passes ``isinstance`` without explicit inheritance.
+    """
+
+    @classmethod
+    def __subclasshook__(cls, candidate):
+        if cls is NodeUpdateStrategy:
+            if all(hasattr(candidate, attr) for attr in ("latent_dim", "forward")):
+                return True
+        return NotImplemented
 
     def __init__(self, latent_dim: int):
         super().__init__()
@@ -86,7 +103,7 @@ class _NodeUpdaterBase(nn.Module, ABC):
         ...
 
 
-class ConcatMLPNodeUpdater(_NodeUpdaterBase):
+class ConcatMLPNodeUpdater(NodeUpdateStrategy):
     """Concatenate ``[v_i; a_i]`` and pass through an MLP.
 
     This is the classic DeepMind Graph Nets node update.
@@ -117,7 +134,7 @@ class ConcatMLPNodeUpdater(_NodeUpdaterBase):
         return self.mlp(torch.cat([nodes, aggregated], dim=-1))
 
 
-class RootWeightNodeUpdater(_NodeUpdaterBase):
+class RootWeightNodeUpdater(NodeUpdateStrategy):
     """Affine root-weight update: ``a_i + v_i @ W + b``.
 
     Used by edge-conditioned convolution blocks where the aggregated
@@ -164,7 +181,7 @@ class RootWeightNodeUpdater(_NodeUpdaterBase):
         return out
 
 
-class PassThroughNodeUpdater(_NodeUpdaterBase):
+class PassThroughNodeUpdater(NodeUpdateStrategy):
     """Return aggregated messages directly, ignoring current node features.
 
     Suitable for blocks like EdgeConv where the edge MLP already
@@ -175,7 +192,7 @@ class PassThroughNodeUpdater(_NodeUpdaterBase):
         return aggregated
 
 
-class ResidualMLPNodeUpdater(_NodeUpdaterBase):
+class ResidualMLPNodeUpdater(NodeUpdateStrategy):
     """Residual add then MLP: ``MLP(v_i + a_i)``, with optional message normalization.
 
     Used by GEN (generalized aggregation) blocks.

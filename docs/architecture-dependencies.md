@@ -305,27 +305,27 @@ Extensible aggregation system with pluggable reduction methods.
 from gnn_pde_v2.core import Aggregation, Sum, Mean, Max, Min, get_aggregation
 ```
 
-### core/protocols.py - Structural Protocols
-TypeScript-style **structural** protocols for component contracts. These are
-`@runtime_checkable`, but note that `runtime_checkable` only checks method
-*names*: `isinstance` cannot distinguish single-`forward` protocols
-(`GraphEncoder`/`GraphProcessor`/`NodeDecoder`/`GraphModel`, or the grid trio)
-from one another. They are static-typing / documentation hints, **not** runtime
-discriminators. Code that must branch on a component's role uses an explicit
-discriminator instead (e.g. `EncodeProcessDecode` dispatches on the decoder's
-`is_query_decoder` class attribute, not on `isinstance`).
+### core/protocols.py - Stage Hints
+The graph-stage roles are plain `Callable` type aliases, used only as readable
+annotations for `EncodeProcessDecode`. They carry no runtime contract — role
+dispatch uses an explicit discriminator instead (e.g. `EncodeProcessDecode`
+dispatches on the decoder's `is_query_decoder` class attribute, not on
+`isinstance`). The component contracts (`EdgeMessageProcessor`,
+`NodeUpdateStrategy`, `EdgeFeatureAssembler`) are ABCs that live in
+`gnn_pde_v2.components`, not here.
 
 ```python
 from gnn_pde_v2.core.protocols import (
     GraphEncoder, GraphProcessor, NodeDecoder, QueryDecoder,
-    GraphModel, NodeUpdateStrategy, EdgeMessageProcessor, EdgeFeatureAssembler,
+)
+from gnn_pde_v2.components import (
+    NodeUpdateStrategy, EdgeMessageProcessor, EdgeFeatureAssembler,
 )
 ```
 
 `Modulation` and `ConditioningProtocol` are still importable from
 `core.protocols` for backwards compatibility, but they are **re-exports** —
-see `core/conditioning.py` below. `Decoder = Union[NodeDecoder, QueryDecoder]`
-is a deprecated alias kept only for import compatibility.
+see `core/conditioning.py` below.
 
 ### core/conditioning.py - Conditioning Primitives
 Home of the conditioning types, which are **nominal** ABCs (inheritance-based
@@ -532,9 +532,9 @@ from gnn_pde_v2.core import (
     Aggregation, Sum, Mean, Max, Min, get_aggregation,
     # Conditioning (canonical home: core.conditioning; re-exported here)
     Modulation, ConditioningProtocol,
-    # Protocols (structural)
-    GraphEncoder, GraphProcessor, NodeUpdateStrategy,
-    NodeDecoder, QueryDecoder, GraphModel,
+    # Stage hints (Callable aliases)
+    GraphEncoder, GraphProcessor,
+    NodeDecoder, QueryDecoder,
 )
 ```
 
@@ -586,9 +586,10 @@ from gnn_pde_v2.components import (
     ProbeDecoder, WindFarmGNO, ProbeGraphBuilder,
     # RBF
     LearnableRBFEncoder, GaussianRBFEncoder,
-    # Protocols (re-exported)
-    GraphEncoder, GraphProcessor, EdgeMessageProcessor,
-    NodeDecoder, QueryDecoder, GraphModel,
+    # Component contracts (ABCs) + stage hints (re-exported)
+    EdgeMessageProcessor, NodeUpdateStrategy,
+    GraphEncoder, GraphProcessor,
+    NodeDecoder, QueryDecoder,
 )
 
 # Multiscale — import explicitly from the subpackage:

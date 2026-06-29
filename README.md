@@ -112,14 +112,15 @@ output = model(graph)  # [10, 2]
 | `Min` | Min aggregation |
 | `get_aggregation()` | Factory function |
 
-### Protocols
-| Protocol | Description |
+### Stage type hints
+These are plain `Callable` type aliases (not runtime contracts), used only as
+readable annotations for `EncodeProcessDecode`.
+| Alias | Description |
 |----------|-------------|
-| `GraphEncoder` | Protocol for encoding modules (GraphsTuple → GraphsTuple) |
-| `GraphProcessor` | Protocol for processor modules (GraphsTuple → GraphsTuple) |
-| `NodeDecoder` | Protocol for node decoders |
-| `QueryDecoder` | Protocol for query-based decoders |
-| `GraphModel` | Protocol for end-to-end graph models |
+| `GraphEncoder` | `Callable[[GraphsTuple], GraphsTuple]` — encoding modules |
+| `GraphProcessor` | `Callable[[GraphsTuple], GraphsTuple]` — processor modules |
+| `NodeDecoder` | `Callable[[GraphsTuple], Tensor]` — node decoders |
+| `QueryDecoder` | `Callable[..., Tensor]` — query-based decoders |
 
 > **Note:** The graph-world protocols above are static-typing hints only (not
 > `runtime_checkable`). Runtime dispatch uses explicit discriminators (e.g. the

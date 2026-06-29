@@ -58,6 +58,7 @@ from .processors import (
     GlobalGraphNetBlock, GlobalGraphNetProcessor,
 )
 from .edge_processors import (
+    EdgeMessageProcessor,
     FullEdgeMessageProcessor,
     VectorEdgeMessageProcessor,
     ScalarEdgeMessageProcessor,
@@ -71,6 +72,7 @@ from .edge_assemblers import (
     ConcatWithEdgesAssembler,
 )
 from .node_updaters import (
+    NodeUpdateStrategy,
     ConcatMLPNodeUpdater,
     RootWeightNodeUpdater,
     PassThroughNodeUpdater,
@@ -126,16 +128,15 @@ from .spectral import (
 from ..core.protocols import (
     GraphEncoder,
     GraphProcessor,
-    EdgeMessageProcessor,
     NodeDecoder,
     QueryDecoder,
-    GraphModel,
 )
 
 __all__ = [
     # Encoders
     "FourierFeatureEncoder",
     # Node updaters
+    "NodeUpdateStrategy",
     "ConcatMLPNodeUpdater",
     "RootWeightNodeUpdater",
     "PassThroughNodeUpdater",
@@ -160,6 +161,7 @@ __all__ = [
     "MessagePassingBase",
     "GraphNetBlock",
     "EdgeConditionedConvBlock",
+    "EdgeMessageProcessor",
     "FullEdgeMessageProcessor",
     "VectorEdgeMessageProcessor",
     "ScalarEdgeMessageProcessor",
@@ -225,8 +227,6 @@ __all__ = [
     # Structural protocols
     "GraphEncoder",
     "GraphProcessor",
-    "EdgeMessageProcessor",
     "NodeDecoder",
     "QueryDecoder",
-    "GraphModel",
 ]

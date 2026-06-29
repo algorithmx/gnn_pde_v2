@@ -26,13 +26,13 @@ class EncodeProcessDecode(BaseModel):
     - Multi-fidelity architectures
     
     Args:
-        encoder: Graph encoder satisfying :class:`~gnn_pde_v2.core.GraphEncoder`
-            protocol; maps ``GraphsTuple → GraphsTuple``.
-        processor: Graph processor satisfying
-            :class:`~gnn_pde_v2.core.GraphProcessor` protocol; maps
+        encoder: Graph encoder matching the :data:`~gnn_pde_v2.core.GraphEncoder`
+            hint; maps ``GraphsTuple → GraphsTuple``.
+        processor: Graph processor matching the
+            :data:`~gnn_pde_v2.core.GraphProcessor` hint; maps
             ``GraphsTuple → GraphsTuple``.
-        decoder: Decoder satisfying either :class:`~gnn_pde_v2.core.NodeDecoder`
-            (``GraphsTuple → Tensor``) or :class:`~gnn_pde_v2.core.QueryDecoder`
+        decoder: Decoder matching either :data:`~gnn_pde_v2.core.NodeDecoder`
+            (``GraphsTuple → Tensor``) or :data:`~gnn_pde_v2.core.QueryDecoder`
             (``(GraphsTuple, Tensor) → Tensor``).  ``EncodeProcessDecode``
             dispatches on the decoder's ``is_query_decoder`` class attribute:
             ``query_positions`` is forwarded only when ``is_query_decoder`` is
@@ -76,8 +76,8 @@ class EncodeProcessDecode(BaseModel):
         # Decode — dispatch on the decoder's declared kind so that NodeDecoder
         # implementations are never called with the query_positions argument
         # they don't accept. The discriminator is an explicit class attribute
-        # (``is_query_decoder``) rather than an isinstance check, because
-        # ``@runtime_checkable`` protocols cannot distinguish decoder signatures.
+        # (``is_query_decoder``); the stage hints are plain Callable aliases
+        # that cannot distinguish decoder signatures at runtime.
         if getattr(self.decoder, "is_query_decoder", False):
             output = self.decoder(processed, query_positions)
         else:

@@ -25,10 +25,8 @@ from .conditioning import Modulation, ConditioningProtocol
 from .protocols import (
     GraphEncoder,
     GraphProcessor,
-    NodeUpdateStrategy,
     NodeDecoder,
     QueryDecoder,
-    GraphModel,
 )
 
 __all__ = [
@@ -61,5 +59,4 @@ __all__ = [
     "GraphProcessor",
     "NodeDecoder",
     "QueryDecoder",
-    "GraphModel",
 ]

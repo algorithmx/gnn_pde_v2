@@ -5,7 +5,36 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+
+## [2.9.9] - 2026-06-29
+
+TODO
+
+## [2.9.8] - 2026-06-29
+
+### Single-Mechanism Contracts + Stage Hint Aliases (Issue #3)
+
+Resolved the dual Protocol+ABC extension mechanism (`docs/architecture_issues.md`
+§3). Each pluggable component contract now has exactly one mechanism — a public
+ABC living next to its implementations:
+- `EdgeMessageProcessor` (`components/edge_processors.py`, was `_EdgeMessageProcessorBase`)
+- `NodeUpdateStrategy` (`components/node_updaters.py`, was `_NodeUpdaterBase`)
+- `EdgeFeatureAssembler` (`components/edge_assemblers.py`, ABC kept)
+
+The colliding/redundant `typing.Protocol` twins were deleted from
+`core/protocols.py`. Each ABC keeps a `__subclasshook__`, so duck-typed
+`nn.Module`s still pass `isinstance` (open for extension without inheritance).
+
+The remaining graph-stage hints were demoted from `Protocol` to plain `Callable`
+aliases (no runtime contract): `GraphEncoder`/`GraphProcessor =
+Callable[[GraphsTuple], GraphsTuple]`, `NodeDecoder = Callable[[GraphsTuple],
+Tensor]`, `QueryDecoder = Callable[..., Tensor]`. The unused `GraphModel` was
+removed entirely. `EncodeProcessDecode` dispatch is unchanged (uses
+`is_query_decoder`).
+
+**Migration:** import `EdgeMessageProcessor`/`NodeUpdateStrategy`/
+`EdgeFeatureAssembler` from `gnn_pde_v2.components`, not `core.protocols`. Drop
+any `GraphModel` import — annotate end-to-end models with `nn.Module`.
 
 ### Remove Decorative Structural Protocols (Issue #4)
 

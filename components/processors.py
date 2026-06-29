@@ -28,10 +28,9 @@ from ..core.graph import GraphsTuple
 from ..core.functional import aggregate_edges, broadcast_global, aggregate_to_global, scatter_softmax
 from ..core.mlp import MLP
 from ..core.aggregation import Aggregation, Sum, get_aggregation
-from ..core.protocols import EdgeMessageProcessor, EdgeFeatureAssembler
-from .edge_assemblers import NodeDifferenceAssembler
+from .edge_assemblers import NodeDifferenceAssembler, EdgeFeatureAssembler
 from .edge_processors import (
-    _EdgeMessageProcessorBase,
+    EdgeMessageProcessor,
     FullEdgeMessageProcessor,
     VectorEdgeMessageProcessor,
     ScalarEdgeMessageProcessor,
@@ -39,7 +38,7 @@ from .edge_processors import (
     _default_edge_message_processor,
 )
 from .node_updaters import (
-    _NodeUpdaterBase,
+    NodeUpdateStrategy,
     ConcatMLPNodeUpdater,
     RootWeightNodeUpdater,
     PassThroughNodeUpdater,
