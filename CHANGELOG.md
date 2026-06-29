@@ -8,7 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [2.9.9] - 2026-06-29
 
-TODO
+### Representative Models: Transolver, GNO, GraphUNet, MGKN
+
+Promoted four frequently re-implemented architectures into reusable, registered
+models under `models/`, so examples can build them in one call instead of
+defining the full model inline:
+- `Transolver` (`models/transolver.py`, name `transolver`): physics-attention
+  transformer with `unified_pos` grid encoding and a `variant='v3'` option for
+  tiled industrial-scale attention. Exports `TransolverBlock`.
+- `GraphNeuralOperator` (`models/gno.py`, name `gno`): edge-conditioned graph
+  kernel network (Li et al. 2020).
+- `GraphUNet` (`models/graph_unet.py`, name `graph_unet`): gPool/gUnpool GCN
+  encoder-decoder with skip connections; node- and graph-classification modes.
+- `MGKN` (`models/mgkn.py`, name `mgkn`): multipole V-cycle graph operator with
+  kernel message passing.
+
+Examples rewritten to import these models, cutting large inline duplications:
+`example_transolver.py`, `example_transolver_v3.py`, `example_graph_pde_gno.py`,
+`example_graph_unets.py`, `example_mgkn.py`. Public class names and example
+helpers are preserved via aliases for backward compatibility.
 
 ## [2.9.8] - 2026-06-29
 

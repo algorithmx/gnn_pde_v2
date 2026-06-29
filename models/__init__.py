@@ -11,6 +11,11 @@ _LAZY_MODELS = {
     'GraphNet': ('.gnn_model', 'GraphNet'),
     'MeshGraphNet': ('.gnn_model', 'MeshGraphNet'),
     'MultiscaleFNO': ('.multiscale_fno', 'MultiscaleFNO'),
+    'Transolver': ('.transolver', 'Transolver'),
+    'TransolverBlock': ('.transolver', 'TransolverBlock'),
+    'GraphNeuralOperator': ('.gno', 'GraphNeuralOperator'),
+    'GraphUNet': ('.graph_unet', 'GraphUNet'),
+    'MGKN': ('.mgkn', 'MGKN'),
 }
 
 __all__ = [
@@ -21,6 +26,11 @@ __all__ = [
     "GraphNet",
     "MeshGraphNet",
     "MultiscaleFNO",
+    "Transolver",
+    "TransolverBlock",
+    "GraphNeuralOperator",
+    "GraphUNet",
+    "MGKN",
 ]
 
 
