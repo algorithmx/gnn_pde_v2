@@ -5,6 +5,11 @@ All notable changes to the GNN-PDE framework will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [2.9.10] - 2026-06-29
+
+### Consolidate test temperature files
+
+Remove temperature-related tests: integration, unit, research, training, and stability tests have been deleted to streamline the testing framework.
 
 ## [2.9.9] - 2026-06-29
 
